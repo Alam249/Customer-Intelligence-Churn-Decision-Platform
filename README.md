@@ -19,7 +19,7 @@ exposed through a REST API and an analyst dashboard.
 | 3 | PostgreSQL relational pipeline | ✅ Complete |
 | 4 | Data quality & validation | ✅ Complete |
 | 5 | Exploratory data analysis | ✅ Complete |
-| 6 | Feature engineering | ⬜ Not started |
+| 6 | Feature engineering | ✅ Complete |
 | 7 | Baseline model (Logistic Regression) | ⬜ Not started |
 | 8–13 | Advanced models, tuning, calibration, SHAP, CLV, segmentation | ⬜ Not started |
 | 14–17 | FastAPI, Streamlit, MLflow, Docker | ⬜ Not started |
@@ -361,6 +361,56 @@ All figures are saved to [reports/figures/](reports/figures/):
   <img src="reports/figures/target_balance.png" width="420" alt="Churn label distribution">
   <img src="reports/figures/binned_monetary_total_churn_rate.png" width="420" alt="Churn rate by monetary total quintile">
 </p>
+
+---
+
+## Feature engineering
+
+```bash
+python scripts/run_feature_engineering.py
+```
+
+Reads the Step 4 validated feature table (4,323 customers) and produces
+`data/processed/train.parquet` (3,458), `data/processed/test.parquet` (865), the
+fitted transformer `models/feature_engineer.joblib`, and
+[reports/feature_engineering_report.md](reports/feature_engineering_report.md) — a
+full dictionary of every feature reaching the model (formula, business meaning,
+churn hypothesis, leakage risk), generated from
+[src/features/catalog.py](src/features/catalog.py).
+
+**Split strategy: stratified random, not time-based.** The feature table is a
+single cross-sectional snapshot — one row per customer at one fixed cutoff — so
+there is no per-row time axis to split on; a genuine time-based split would need
+multiple snapshot cutoffs, a larger exercise reserved for future drift work
+(Step 19). The split is stratified on `is_churned` (train 42.51% churned, test
+42.54% — both within 0.1pp of the full dataset's 42.52%).
+
+**New features** (on top of the 22 SQL features from Step 3 and the 2 quality
+flags from Step 4), built by [`src/features/engineer.py`](src/features/engineer.py)'s
+`CustomerFeatureEngineer`:
+
+| Feature | Formula | Why |
+| --- | --- | --- |
+| `spend_per_tenure_month` | `monetary_total / (tenure_days / 30.44)` | Spend velocity, not just accumulated total |
+| `orders_ratio_90d` | `orders_last_90d / frequency` | Scale-free trend signal (complements `spend_ratio_90d`) |
+| `products_per_order` | `distinct_products / frequency` | Catalogue breadth per transaction |
+| `purchase_regularity_cv` | `std_interpurchase_days / avg_interpurchase_days` | How predictable a customer's rhythm is — the closest honest substitute this dataset has for a "contract risk" signal (no contract data exists) |
+| `rfm_score` | R/F/M quantile-scored 1–5, summed (3–15) | Classic composite score for reporting/segmentation |
+| `is_high_value` | `monetary_total >= 75th pct(train)` | Business-readable top-quartile flag |
+
+**Leakage discipline, proven not just claimed.** `rfm_score` and `is_high_value`
+need a quantile threshold learned from data — exactly the kind of feature that
+leaks if mishandled. `CustomerFeatureEngineer.fit()` is called on the training
+split only; the test split reuses those thresholds rather than recomputing its
+own. Verified concretely: the test split's own 75th percentile of
+`monetary_total` is 2,487.30 (different from the 2,189.00 learned on train) — if
+`is_high_value` had been (incorrectly) computed from the test split itself,
+25.1% of test customers would be flagged by construction. The actual flagged
+share is **28.3%**, proving the training threshold was applied, not a refit one.
+
+`rfm_score` alone produces a clean, monotonic churn gradient on the training
+split — 79.6% churn at the lowest score (3) down to 2.8% at the highest (14) —
+without needing any model at all.
 
 ---
 

@@ -22,6 +22,7 @@ import pandas as pd  # noqa: E402
 from src.config import CONFIG, PATHS  # noqa: E402
 from src.data import quality as q  # noqa: E402
 from src.utils.logging import get_logger  # noqa: E402
+from src.utils.report import md_table  # noqa: E402
 
 logger = get_logger(__name__)
 
@@ -38,18 +39,6 @@ FEATURE_NUMERIC_COLS = [
     "avg_unit_price", "return_invoices", "return_value", "return_rate",
     "orders_last_30d", "orders_last_90d", "spend_last_90d", "spend_ratio_90d",
 ]
-
-
-def md_table(df: pd.DataFrame, index: bool = True) -> str:
-    """Render a DataFrame as GitHub-flavoured Markdown without extra dependencies."""
-    d = df.reset_index() if index else df
-    header = "| " + " | ".join(str(c) for c in d.columns) + " |"
-    sep = "| " + " | ".join("---" for _ in d.columns) + " |"
-    rows = [
-        "| " + " | ".join("" if pd.isna(v) else str(v) for v in row) + " |"
-        for row in d.itertuples(index=False)
-    ]
-    return "\n".join([header, sep, *rows])
 
 
 def profile_raw(raw: pd.DataFrame) -> list[str]:

@@ -21,6 +21,7 @@ seaborn==0.13.1
 
 # ---- Machine learning ----
 scikit-learn==1.3.2
+joblib==1.5.3   # imported directly to persist the fitted feature-engineering transformer
 
 # ---- Notebooks ----
 jupyter==1.0.0
