@@ -1,0 +1,55 @@
+# Central configuration for the Customer Intelligence & Churn Decision Platform.
+# Values here are the *project decisions*; code should never hard-code them.
+# Secrets do NOT belong in this file — they come from .env (see .env.example).
+
+project:
+  name: customer-intelligence-platform
+  random_seed: 42
+
+paths:
+  # All paths are resolved relative to the repository root by src/config.py
+  data_raw: data/raw
+  data_interim: data/interim
+  data_processed: data/processed
+  data_external: data/external
+  models: models
+  reports: reports
+  figures: reports/figures
+  sql: sql
+  logs: logs
+
+data:
+  # UCI Online Retail II — transactional data for a UK online gift retailer,
+  # 2009-12-01 to 2011-12-09. See README for provenance.
+  raw_file: online_retail_II.csv
+  date_column: InvoiceDate
+  customer_id_column: "Customer ID"
+
+  # Rows that are not genuine product sales. Justified in the data-quality step;
+  # kept as config so the decision is visible and reversible.
+  credit_note_invoice_prefix: "C"
+  drop_missing_customer_id: true
+  drop_non_positive_quantity: true
+  drop_non_positive_price: true
+
+churn_definition:
+  # Online Retail II is a NON-CONTRACTUAL setting: there is no churn column.
+  # Churn is defined by observed inactivity after a fixed cutoff date.
+  # Feature (observation) window ends at `cutoff_date`; the label is measured
+  # in the following `horizon_days`. This is what prevents target leakage.
+  cutoff_date: "2011-06-09"
+  horizon_days: 183          # ~6 months
+  eligibility_lookback_days: 365  # customer must have purchased in the year before cutoff
+
+logging:
+  level: INFO
+  format: "%(asctime)s | %(levelname)-8s | %(name)s | %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+  log_to_file: true
+  filename: pipeline.log
+
+database:
+  # Connection *shape* only. Credentials are read from environment variables
+  # (POSTGRES_USER / POSTGRES_PASSWORD / ...) at runtime.
+  driver: postgresql+psycopg2
+  schema: public

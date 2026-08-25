@@ -1,0 +1,58 @@
+# ---- Data (never commit datasets) ----
+data/raw/*
+data/interim/*
+data/processed/*
+data/external/*
+!data/**/.gitkeep
+*.zip
+
+# ---- Models & experiment tracking ----
+models/*
+!models/.gitkeep
+mlruns/
+mlartifacts/
+*.pkl
+*.joblib
+*.onnx
+
+# ---- Reports ----
+# Figures ARE committed (small PNGs) so the README renders on GitHub without
+# requiring anyone to run the notebook first.
+logs/*
+!logs/.gitkeep
+
+# ---- Secrets / environment ----
+.env
+.env.*
+!.env.example
+*.pem
+secrets.yaml
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.python-version
+
+# ---- Testing / tooling caches ----
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+coverage.xml
+
+# ---- Notebooks ----
+.ipynb_checkpoints/
+
+# ---- OS / IDE ----
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
