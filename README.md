@@ -20,7 +20,7 @@ exposed through a REST API and an analyst dashboard.
 | 4 | Data quality & validation | ✅ Complete |
 | 5 | Exploratory data analysis | ✅ Complete |
 | 6 | Feature engineering | ✅ Complete |
-| 7 | Baseline model (Logistic Regression) | ⬜ Not started |
+| 7 | Baseline model (Logistic Regression) | ✅ Complete |
 | 8–13 | Advanced models, tuning, calibration, SHAP, CLV, segmentation | ⬜ Not started |
 | 14–17 | FastAPI, Streamlit, MLflow, Docker | ⬜ Not started |
 | 18–21 | Testing, monitoring, uplift, LLM layer | ⬜ Not started |
@@ -411,6 +411,59 @@ share is **28.3%**, proving the training threshold was applied, not a refit one.
 `rfm_score` alone produces a clean, monotonic churn gradient on the training
 split — 79.6% churn at the lowest score (3) down to 2.8% at the highest (14) —
 without needing any model at all.
+
+---
+
+## Baseline model — Logistic Regression
+
+```bash
+python scripts/run_baseline_model.py
+```
+
+The first model, and deliberately **not tuned** — it's the benchmark every later
+model (Step 8's comparison, Step 9's tuned candidate) must beat to justify its
+added complexity. `sklearn.Pipeline` + `ColumnTransformer`: median imputation +
+Yeo-Johnson power transform + standardisation for numeric features, passthrough
+for booleans, `LogisticRegression(class_weight='balanced')`. All fit on the
+training split only.
+
+| Metric | Train | Test |
+| --- | --- | --- |
+| Accuracy | 0.7131 | 0.7214 |
+| Precision | 0.6334 | 0.6494 |
+| Recall | 0.7721 | 0.7500 |
+| F1 | 0.6959 | 0.6961 |
+| ROC-AUC | 0.7904 | **0.8018** |
+| PR-AUC | 0.7118 | **0.6966** |
+
+Train and test scores are close — no meaningful overfitting. **Accuracy alone
+would be misleading here**: a trivial "always predict retained" model scores
+57.5% accuracy while catching zero churners, which is worthless for a retention
+program. ROC-AUC and especially PR-AUC (test base rate 42.5%) are reported for
+exactly that reason.
+
+**A real finding, reported rather than hidden**: for 13 of the 27 features, the
+fitted coefficient's sign disagrees with that feature's own univariate
+correlation with churn — including `rfm_score`, which has the single strongest
+univariate correlation of any feature (-0.474) yet nearly vanishes in the
+multivariate fit. The design matrix's condition number is 145.9 (>30 signals
+real multicollinearity). This doesn't hurt the model's predictions or ranking —
+only the interpretability of individual coefficients — and is diagnosed in full,
+feature-by-feature, in
+[reports/baseline_model_report.md](reports/baseline_model_report.md). Step 9's
+regularisation search and Step 8's tree-based models (not sensitive to
+collinearity) are the paths to a model whose coefficients/importances can be
+read at face value.
+
+Excluded from this linear model specifically (each for a measured reason —
+Step 8's trees may reuse them): `country_name`, `active_days`, the three RFM
+sub-scores, `return_rate_raw`, `orders_ratio_90d`.
+
+<p>
+  <img src="reports/figures/roc_curve.png" width="280" alt="ROC curve">
+  <img src="reports/figures/pr_curve.png" width="280" alt="Precision-Recall curve">
+  <img src="reports/figures/confusion_matrix.png" width="280" alt="Confusion matrix">
+</p>
 
 ---
 

@@ -92,9 +92,13 @@ Concrete evidence: comparing each feature's own univariate correlation with `is_
 | avg_interpurchase_days | -0.0163 | 0.1403 |
 | return_value | 0.0083 | -0.0132 |
 
-For example, `frequency` alone correlates negatively with churn (more orders -> less likely to churn, matching Step 5's EDA) but its fitted coefficient is positive. This happens because `frequency` overlaps heavily with several other included features that also describe order activity (`orders_last_90d`, `purchase_rate_per_month`, `rfm_score`) — once those absorb the shared "this customer orders often" signal, what's left for `frequency` to explain on its own can point the other way. **This is a known limitation of an unregularised-by-default linear baseline with many correlated engineered features, not a bug** — it is exactly what Step 9's regularisation search (and Step 8's tree-based models, which are not sensitive to this) will address. Trust the model's ranking and probability outputs from this baseline; read individual coefficients as directional evidence only where they agree with the feature's own univariate relationship, shown above for every feature.
+For example, `frequency` alone correlates negatively with churn (more orders -> less likely to churn, matching Step 5's EDA) but its fitted coefficient is positive. This happens because `frequency` overlaps heavily with several other included features that also describe order activity (`orders_last_90d`, `purchase_rate_per_month`, `rfm_score`) — once those absorb the shared "this customer orders often" signal, what's left for `frequency` to explain on its own can point the other way.
+
+**`rfm_score` is the most striking case.** It has the STRONGEST univariate correlation with churn of any feature in the table (-0.474 — stronger even than `recency_days`), yet its multivariate coefficient shrinks to nearly zero and flips sign. This is not a failure of the feature: `rfm_score` is built directly from `recency_days`, `frequency` and `monetary_total`, all three of which are ALSO still in the model. Once those three absorb the shared signal, there is almost nothing distinct left for the composite score to explain on its own — the multicollinearity here is by construction, not coincidence. `rfm_score`'s value is as a standalone reporting/segmentation number (Step 12/13), not as an additional input alongside the raw features that built it.
+
+**This is a known limitation of an unregularised-by-default linear baseline with many correlated engineered features, not a bug** — it is exactly what Step 9's regularisation search (and Step 8's tree-based models, which are not sensitive to this) will address. Trust the model's ranking and probability outputs from this baseline; read individual coefficients as directional evidence only where they agree with the feature's own univariate relationship, shown above for every feature.
 
 ## Timing
 
-- Training time: 0.085s (3,458 rows)
-- Inference time: 0.0033ms per customer (test set, batch-predicted)
+- Training time: 0.143s (3,458 rows)
+- Inference time: 0.0036ms per customer (test set, batch-predicted)
