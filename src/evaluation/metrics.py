@@ -26,7 +26,7 @@ from sklearn.metrics import (
     roc_curve,
 )
 
-from src.eda import CHURN_COLORS, INK, SEQUENTIAL_BLUE, save_figure, set_style
+from src.eda import CATEGORICAL, CHURN_COLORS, INK, SEQUENTIAL_BLUE, save_figure, set_style
 
 set_style()
 
@@ -106,6 +106,63 @@ def plot_pr_curve(y_true, y_proba, name: str = "pr_curve") -> Path:
     ax.set_ylabel("Precision")
     ax.set_title("Precision-Recall curve")
     ax.legend(loc="upper right", frameon=False, fontsize=9)
+    fig.tight_layout()
+    return save_figure(fig, name)
+
+
+def plot_roc_comparison(models: dict[str, tuple], name: str = "roc_comparison") -> Path:
+    """Overlaid ROC curves for several models on one axis.
+
+    ``models`` maps a display name to (y_true, y_proba). Colours are assigned
+    from the project's fixed categorical order, never cycled arbitrarily, so a
+    given model keeps the same colour across any chart it appears in within a run.
+    """
+    fig, ax = plt.subplots(figsize=(5.2, 4.8))
+    for i, (label, (y_true, y_proba)) in enumerate(models.items()):
+        fpr, tpr, _ = roc_curve(y_true, y_proba)
+        auc_score = roc_auc_score(y_true, y_proba)
+        ax.plot(fpr, tpr, color=CATEGORICAL[i % len(CATEGORICAL)], linewidth=2,
+                 label=f"{label} (AUC = {auc_score:.3f})")
+    ax.plot([0, 1], [0, 1], color=INK["muted"], linestyle="--", linewidth=1, label="No skill")
+    ax.set_xlabel("False positive rate")
+    ax.set_ylabel("True positive rate")
+    ax.set_title("ROC curve comparison")
+    ax.legend(loc="lower right", frameon=False, fontsize=9)
+    fig.tight_layout()
+    return save_figure(fig, name)
+
+
+def plot_feature_importance(importance_table: pd.DataFrame, top_n: int = 15, name: str = "feature_importance") -> Path:
+    """Horizontal bar chart of a tree model's built-in feature importances.
+
+    ``importance_table`` must have columns ['feature', 'importance']. Unlike
+    the Logistic Regression coefficient chart, there is no sign here — impurity/
+    gain-based importance is always non-negative and says nothing about
+    direction (see Step 11's SHAP analysis for that).
+    """
+    top = importance_table.sort_values("importance", ascending=False).head(top_n).iloc[::-1]
+    fig, ax = plt.subplots(figsize=(7, max(3, 0.35 * len(top))))
+    ax.barh(top["feature"], top["importance"], color=SEQUENTIAL_BLUE)
+    ax.set_xlabel("Importance")
+    ax.set_title(f"Feature importance (top {len(top)})")
+    fig.tight_layout()
+    return save_figure(fig, name)
+
+
+def plot_optimization_history(trial_values: list[float], name: str = "optuna_history") -> Path:
+    """Per-trial CV score plus the running best — shows whether the search
+    actually converged or was still improving when it stopped.
+    """
+    running_best = np.maximum.accumulate(trial_values)
+    fig, ax = plt.subplots(figsize=(6.5, 4))
+    ax.scatter(range(1, len(trial_values) + 1), trial_values, color=INK["muted"], s=18,
+               alpha=0.6, label="Trial score")
+    ax.plot(range(1, len(trial_values) + 1), running_best, color=SEQUENTIAL_BLUE, linewidth=2,
+            label="Best so far")
+    ax.set_xlabel("Trial")
+    ax.set_ylabel("CV score (average precision)")
+    ax.set_title("Hyperparameter search progress")
+    ax.legend(loc="lower right", frameon=False, fontsize=9)
     fig.tight_layout()
     return save_figure(fig, name)
 

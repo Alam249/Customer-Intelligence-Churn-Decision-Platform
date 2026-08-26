@@ -1,10 +1,13 @@
-"""Preprocessing for the Logistic Regression baseline.
+"""Preprocessing for the churn models — Logistic Regression baseline (Step 7)
+and the tree-based models compared in Step 8.
 
-A linear model is far more sensitive to two things a tree-based model (Step 8)
-mostly shrugs off: **collinear inputs** (inflated, unstable coefficients) and
+A linear model is far more sensitive to two things a tree-based model mostly
+shrugs off: **collinear inputs** (inflated, unstable coefficients) and
 **skewed inputs** (a few extreme values dominate the fit). Both were measured
-on the training split, not assumed — the numbers behind every exclusion below
-are in `reports/baseline_model_report.md`.
+on the training split, not assumed — the numbers behind every linear-model
+exclusion are in `reports/baseline_model_report.md`. Tree-based models get the
+FULL feature set instead, including everything excluded from the linear model,
+because they are not sensitive to either problem.
 
 Target column: `is_churned`. Identifier: `customer_id` (never a feature).
 """
@@ -15,7 +18,7 @@ import pandas as pd
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
-from sklearn.preprocessing import PowerTransformer
+from sklearn.preprocessing import OneHotEncoder, PowerTransformer
 
 TARGET = "is_churned"
 IDENTIFIER = "customer_id"
@@ -102,3 +105,47 @@ def split_X_y(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     X = df[NUMERIC_FEATURES + BOOLEAN_FEATURES]
     y = df[TARGET].astype(int)
     return X, y
+
+
+# ---------------------------------------------------------------------------
+# Tree-based models (Step 8): the FULL feature set, including everything
+# excluded above for the linear model specifically.
+# ---------------------------------------------------------------------------
+
+TREE_CATEGORICAL_FEATURES = ["country_name"]
+
+TREE_NUMERIC_FEATURES = NUMERIC_FEATURES + BOOLEAN_FEATURES + list(EXCLUDED_WITH_REASON.keys())
+TREE_NUMERIC_FEATURES.remove("country_name")  # the one exclusion that is categorical, not numeric
+
+
+def build_tree_preprocessor() -> ColumnTransformer:
+    """ColumnTransformer for Random Forest / XGBoost.
+
+    No scaling or power transform — trees split on raw thresholds, so monotonic
+    transforms of a single column change nothing about what the model learns.
+    Median imputation is still needed: scikit-learn's RandomForestClassifier
+    cannot accept NaN natively (XGBoost can, but a shared preprocessor keeps
+    the comparison apples-to-apples between the two).
+    """
+    return ColumnTransformer(
+        transformers=[
+            ("numeric", SimpleImputer(strategy="median"), TREE_NUMERIC_FEATURES),
+            ("categorical", OneHotEncoder(handle_unknown="ignore"), TREE_CATEGORICAL_FEATURES),
+        ]
+    )
+
+
+def split_X_y_tree(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """Select the full tree-model feature columns and target from a train/test frame."""
+    X = df[TREE_NUMERIC_FEATURES + TREE_CATEGORICAL_FEATURES]
+    y = df[TARGET].astype(int)
+    return X, y
+
+
+def get_tree_output_feature_names(preprocessor: ColumnTransformer) -> list[str]:
+    """Feature names in the order the tree ColumnTransformer emits them —
+    the one-hot categorical block expands to one column per observed country.
+    """
+    ohe: OneHotEncoder = preprocessor.named_transformers_["categorical"]
+    country_names = [f"country_{c}" for c in ohe.categories_[0]]
+    return TREE_NUMERIC_FEATURES + country_names

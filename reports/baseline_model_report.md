@@ -100,5 +100,5 @@ For example, `frequency` alone correlates negatively with churn (more orders -> 
 
 ## Timing
 
-- Training time: 0.143s (3,458 rows)
-- Inference time: 0.0036ms per customer (test set, batch-predicted)
+- Training time: 0.113s (3,458 rows)
+- Inference time: 0.0033ms per customer (test set, batch-predicted)

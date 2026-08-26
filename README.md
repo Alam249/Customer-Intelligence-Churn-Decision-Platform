@@ -21,7 +21,10 @@ exposed through a REST API and an analyst dashboard.
 | 5 | Exploratory data analysis | ✅ Complete |
 | 6 | Feature engineering | ✅ Complete |
 | 7 | Baseline model (Logistic Regression) | ✅ Complete |
-| 8–13 | Advanced models, tuning, calibration, SHAP, CLV, segmentation | ⬜ Not started |
+| 8 | Advanced model comparison (Random Forest, XGBoost) | ✅ Complete |
+| 9 | Hyperparameter optimization (Optuna) | ✅ Complete |
+| 10 | Probability calibration & business threshold | ✅ Complete |
+| 11–13 | SHAP, CLV, segmentation | ⬜ Not started |
 | 14–17 | FastAPI, Streamlit, MLflow, Docker | ⬜ Not started |
 | 18–21 | Testing, monitoring, uplift, LLM layer | ⬜ Not started |
 
@@ -464,6 +467,148 @@ sub-scores, `return_rate_raw`, `orders_ratio_90d`.
   <img src="reports/figures/pr_curve.png" width="280" alt="Precision-Recall curve">
   <img src="reports/figures/confusion_matrix.png" width="280" alt="Confusion matrix">
 </p>
+
+---
+
+## Model comparison — Random Forest and XGBoost vs. the baseline
+
+```bash
+python scripts/run_model_comparison.py
+```
+
+| Model | Test ROC-AUC | Test PR-AUC | Overfit gap (train − test AUC) | Train time |
+| --- | --- | --- | --- | --- |
+| **Logistic Regression** | **0.8018** | **0.6966** | -0.011 | (Step 7) |
+| Random Forest | 0.7993 | 0.6954 | 0.201 | 0.41s |
+| XGBoost | 0.7679 | 0.6780 | 0.232 | 0.50s |
+
+**The untuned Logistic Regression baseline wins.** Real result, not a bug: with
+only 3,458 training rows, both untuned tree ensembles show substantial
+overfitting (see the overfit-gap column) that the much lower-capacity linear
+model doesn't. XGBoost's top-5 feature importances even include
+`country_Denmark` — a country with only 6 training customers, 0% of them
+churned, i.e. the model memorized a subgroup this small rather than learning a
+real geographic effect. This is the concrete evidence behind "the most complex
+model is not automatically the best," and it's exactly the scenario Step 9's
+hyperparameter search (constraining depth, adding regularization) targets —
+not evidence trees are the wrong model family here.
+
+Both tree models use the **full 34-column feature set**, including everything
+Step 7 excluded for the linear model on collinearity grounds — trees aren't
+sensitive to that problem. Random Forest's importances spread fairly evenly
+across ~15 features; XGBoost's concentrate heavily on `rfm_score` alone
+(importance 0.27, more than double the next feature) — a first hint of the two
+algorithms' very different sensitivity to correlated inputs, worth revisiting
+with SHAP in Step 11.
+
+A second boosting library (LightGBM/CatBoost) was deliberately not added:
+Random Forest and XGBoost already span bagging vs. boosting, and a second
+booster would mostly repeat XGBoost's story on a dataset this size rather than
+add a genuinely different comparison point.
+
+<p>
+  <img src="reports/figures/roc_comparison.png" width="360" alt="ROC curve comparison across three models">
+  <img src="reports/figures/xgb_feature_importance.png" width="420" alt="XGBoost feature importance">
+</p>
+
+Full discussion — interpretability trade-offs, business cost of each model
+choice, and reasoning for the Step 9 tuning candidate — in
+[reports/model_comparison_report.md](reports/model_comparison_report.md).
+
+---
+
+## Hyperparameter optimization — XGBoost
+
+```bash
+python scripts/run_hyperparameter_tuning.py
+```
+
+**Candidate: XGBoost**, chosen because Step 8 diagnosed it (not Random Forest)
+as showing the largest overfitting gap (0.232) with the richest set of
+regularization controls to fix it directly. Search: **Optuna** (TPE sampler),
+50 trials, stratified 5-fold CV on the training split only — preferred over
+RandomizedSearchCV because the 9-parameter, mostly-continuous space is exactly
+where a sequential, model-guided sampler out-samples uniform random draws.
+Optimized for **PR-AUC (average precision)**, not ROC-AUC: under this mild
+imbalance, ROC-AUC can improve entirely via the tail nobody acts on, while
+PR-AUC tracks the positive-class ranking that actually drives Step 12's
+retention-priority list.
+
+| Model | Test ROC-AUC | Test PR-AUC | Overfit gap |
+| --- | --- | --- | --- |
+| XGBoost (untuned, Step 8) | 0.7679 | 0.6780 | 0.232 |
+| **XGBoost (tuned)** | **0.8091** | **0.6998** | **-0.008** |
+| Logistic Regression (Step 7/8) | 0.8018 | 0.6966 | -0.011 |
+
+**Tuning genuinely fixed the overfitting** (gap closed by 0.24, essentially to
+zero) **and the tuned model now beats the linear baseline** by +0.0073
+ROC-AUC — achieved through regularization (`max_depth=3`, strong L1/L2,
+`gamma=3.95`), not raw capacity. The search converged by trial 4 of 50 and
+never meaningfully improved after — the trial budget was more than sufficient.
+The test set was touched exactly once, after the search completed, never
+during the 50-trial CV loop.
+
+<p>
+  <img src="reports/figures/optuna_history.png" width="380" alt="Hyperparameter search convergence">
+  <img src="reports/figures/roc_comparison_tuning.png" width="380" alt="Tuned vs untuned XGBoost ROC comparison">
+</p>
+
+Full search space, top trials, and best parameters in
+[reports/hyperparameter_tuning_report.md](reports/hyperparameter_tuning_report.md);
+all 50 trial results in `reports/optuna_trials.csv`.
+
+---
+
+## Probability calibration and business threshold
+
+```bash
+python scripts/run_calibration_and_threshold.py
+```
+
+Uses the Step 9 tuned XGBoost model — but checks something ROC-AUC/PR-AUC
+never test: **are its predicted probabilities trustworthy as probabilities?**
+`scale_pos_weight` (used to correct class imbalance) is known to distort this
+even when it helps ranking metrics.
+
+| Probabilities | Brier score |
+| --- | --- |
+| Raw (tuned XGBoost) | 0.1804 |
+| Calibrated (sigmoid) | 0.1755 |
+| **Calibrated (isotonic)** | **0.1746** |
+
+Isotonic calibration measurably improves the Brier score, fit via 5-fold CV on
+the training split only (test never touched during fitting) — **adopted**,
+saved as `models/final_churn_model.joblib`. The reliability diagram confirms
+why: the raw model is visibly underconfident in the mid-probability range.
+
+**Business-cost framework** (a demonstration, explicitly labeled): Online
+Retail II has no record of any real retention campaign, so `contact_cost` and
+`retention_success_rate` are stated, hypothetical assumptions — only
+`value_per_customer` (€899.54, median training `monetary_total`) is measured.
+
+| Scenario | Contact cost | Success rate | Optimal threshold |
+| --- | --- | --- | --- |
+| Cheap, low-touch | €2 | 12% | 0.08 |
+| Primary (moderate offer) | €15 | 25% | 0.08 |
+| Expensive, high-touch | €120 | 20% | **0.36** |
+
+The threshold genuinely moves with the assumptions — not a token gesture: an
+expensive, uncertain-payoff intervention pushes the model to be far more
+selective. **Caveat reported alongside the recommendation, not hidden**: the
+primary scenario's "optimal" threshold (0.08) flags 84% of test customers —
+mathematically correct given the stated costs, but closer to a mass campaign
+than a targeted list; a real team's capacity constraint isn't part of this
+simple framework, and a fixed contact-list size is often the more usable
+operational answer.
+
+<p>
+  <img src="reports/figures/calibration_curve.png" width="320" alt="Calibration reliability diagram">
+  <img src="reports/figures/threshold_curves.png" width="420" alt="Precision and recall vs decision threshold">
+</p>
+
+Full detail — threshold-performance table, cost-framework mechanics, and the
+uplift-modeling caveat this framework doesn't capture (Step 20's territory) —
+in [reports/calibration_threshold_report.md](reports/calibration_threshold_report.md).
 
 ---
 
