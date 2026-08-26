@@ -16,9 +16,9 @@ Both tree models use the FULL feature set (34 columns before one-hot encoding, i
 
 | model | test_accuracy | test_precision | test_recall | test_f1 | test_roc_auc | test_pr_auc | overfit_gap_roc_auc | train_time_s | inference_time_ms |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Logistic Regression | 0.7214 | 0.6494 | 0.75 | 0.6961 | 0.8018 | 0.6966 | -0.0114 |  | 0.0065 |
-| Random Forest | 0.7156 | 0.6815 | 0.6223 | 0.6506 | 0.7993 | 0.6954 | 0.2007 | 0.4155 | 0.0338 |
-| XGBoost | 0.696 | 0.6513 | 0.6141 | 0.6322 | 0.7679 | 0.678 | 0.2321 | 0.5712 | 0.0053 |
+| Logistic Regression | 0.7214 | 0.6494 | 0.75 | 0.6961 | 0.8018 | 0.6966 | -0.0114 |  | 0.0045 |
+| Random Forest | 0.7156 | 0.6815 | 0.6223 | 0.6506 | 0.7993 | 0.6954 | 0.2007 | 0.4029 | 0.0477 |
+| XGBoost | 0.696 | 0.6513 | 0.6141 | 0.6322 | 0.7679 | 0.678 | 0.2321 | 0.4698 | 0.0046 |
 
 ## Discussion
 

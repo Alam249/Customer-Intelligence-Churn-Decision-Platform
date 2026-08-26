@@ -62,8 +62,8 @@ gamma: 3.9489759233054764
 
 | model | test_accuracy | test_precision | test_recall | test_f1 | test_roc_auc | test_pr_auc | overfit_gap_roc_auc | train_time_s | inference_time_ms |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| XGBoost (untuned) | 0.696 | 0.6513 | 0.6141 | 0.6322 | 0.7679 | 0.678 | 0.2321 |  | 0.0039 |
-| XGBoost (tuned) | 0.7364 | 0.6542 | 0.8071 | 0.7226 | 0.8091 | 0.6998 | -0.0081 | 0.1236 | 0.0034 |
+| XGBoost (untuned) | 0.696 | 0.6513 | 0.6141 | 0.6322 | 0.7679 | 0.678 | 0.2321 |  | 0.0048 |
+| XGBoost (tuned) | 0.7364 | 0.6542 | 0.8071 | 0.7226 | 0.8091 | 0.6998 | -0.0081 | 0.1239 | 0.0038 |
 
 - Untuned XGBoost overfit gap (train − test ROC-AUC): **0.2321**
 - Tuned XGBoost overfit gap: **-0.0081**

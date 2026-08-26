@@ -24,7 +24,9 @@ exposed through a REST API and an analyst dashboard.
 | 8 | Advanced model comparison (Random Forest, XGBoost) | ✅ Complete |
 | 9 | Hyperparameter optimization (Optuna) | ✅ Complete |
 | 10 | Probability calibration & business threshold | ✅ Complete |
-| 11–13 | SHAP, CLV, segmentation | ⬜ Not started |
+| 11 | Explainable AI (SHAP) | ✅ Complete |
+| 12 | Customer Lifetime Value & Retention Priority | ✅ Complete |
+| 13 | Customer segmentation | ✅ Complete |
 | 14–17 | FastAPI, Streamlit, MLflow, Docker | ⬜ Not started |
 | 18–21 | Testing, monitoring, uplift, LLM layer | ⬜ Not started |
 
@@ -609,6 +611,164 @@ operational answer.
 Full detail — threshold-performance table, cost-framework mechanics, and the
 uplift-modeling caveat this framework doesn't capture (Step 20's territory) —
 in [reports/calibration_threshold_report.md](reports/calibration_threshold_report.md).
+
+---
+
+## Explainable AI — SHAP
+
+```bash
+python scripts/run_shap_explainability.py
+```
+
+**Which model SHAP explains, and why**: the final model (Step 10) is a
+`CalibratedClassifierCV` — internally 5 cloned pipelines, one per calibration
+fold — which SHAP's `TreeExplainer` cannot open directly. SHAP attribution is
+computed on the pre-calibration Step 9 tuned XGBoost pipeline (calibration
+rescales the output; it doesn't change what the trees split on); the
+probability shown for every customer still comes from the calibrated final
+model, matching what Step 14's API will return.
+
+**Global**: `rfm_score` dominates (mean |SHAP| 0.31, ~3x the runner-up
+`recency_days` at 0.11), with an almost perfectly monotonic dependence plot.
+This directly **contrasts with Step 7's Logistic Regression**, where
+`rfm_score` had the strongest univariate correlation of any feature yet its
+coefficient nearly vanished — absorbed by its own raw ingredients still in the
+linear model. Trees don't have that problem: a concrete, measured illustration
+of why Step 8 compared multiple model families instead of trusting one's
+feature ranking.
+
+**Local**: a reusable `explain_customer(customer_id, ...)` function (used
+identically here and by the future Step 14 `/predict/explain` endpoint) —
+narrative + a red/blue waterfall-style chart using the same churn-color
+convention as every chart since Step 5:
+
+> Customer 14822: 94.9% predicted churn probability (High risk). Top factors
+> increasing risk: rfm_score = 3 (+0.35); recency_days = 302 (+0.19);
+> monetary_total = 158 (+0.14)...
+
+**What SHAP does and doesn't mean, stated explicitly**: values are in log-odds
+space (not literal probability points), and — critically — **a high-impact
+feature is not a cause of churn**. `recency_days` dominates partly because
+it's mechanically close to how churn is *labelled*; that's expected, not
+evidence of causation. Real causal claims need Step 20's experimental design,
+not an explainability method applied to an observational model.
+
+<p>
+  <img src="reports/figures/shap_summary.png" width="380" alt="SHAP beeswarm summary plot">
+  <img src="reports/figures/shap_local_14822.png" width="380" alt="Local SHAP explanation for a high-risk customer">
+</p>
+
+Full detail in [reports/shap_explainability_report.md](reports/shap_explainability_report.md).
+
+> **Dependency note**: SHAP 0.49.1 (latest) cannot parse XGBoost ≥3.0's
+> `base_score` serialization format ([shap#4202](https://github.com/shap/shap/issues/4202)).
+> `xgboost` is pinned to `2.1.4` in requirements.txt; Steps 8-10 were
+> regenerated under this version and produced byte-identical results.
+
+---
+
+## Customer Lifetime Value and Retention Priority
+
+```bash
+python scripts/run_clv_and_retention_priority.py
+```
+
+**Methodology: BG/NBD + Gamma-Gamma**, not a simpler average-spend proxy —
+justified because Online Retail II genuinely has what this needs: a full
+multi-year repeat-purchase transaction history per customer in a
+non-contractual setting, the textbook use case these models were built for.
+CLV is projected over the same 183-day horizon as the churn label, using each
+customer's complete transaction history (not the churn model's 365-day
+lookback window).
+
+Checked, not assumed: Gamma-Gamma's independence assumption (correlation
+between frequency and monetary value = 0.084, negligible — holds). **Found by
+testing, not theory**: Gamma-Gamma's conditional-expectation formula is
+unstable at `frequency=0` — verified it returns a *negative* "expected
+profit" for one-time buyers — confirming why they're handled with their own
+observed transaction value instead (32.5% of the population, so this isn't a
+minor edge case).
+
+**Retention Priority Score** = `churn_probability × CLV` — the expected
+revenue at risk if nothing is done, deliberately the simplest defensible
+formula rather than an arbitrarily "improved" one.
+
+**Why churn probability alone is not enough — measured**: ranking the same
+200-customer contact budget by churn probability alone vs. the combined
+score:
+
+| Ranking strategy | Total CLV-at-risk captured |
+| --- | --- |
+| Churn probability alone | €7,172 |
+| **Retention priority score** | **€118,980** |
+
+The two lists share **zero customers**. The highest churn-probability
+customers are long-dormant, zero-repeat-purchase accounts worth €50-60 each —
+the model is confident they're already gone, and there's little left to
+protect. The top priority-ranked customer has only 37% churn probability but
+an estimated €32,668 CLV.
+
+**A limitation surfaced, not hidden**: the pure product formula lets extreme
+CLV outliers dominate the ranking even at low risk (8 of the top 10 are "Low
+risk / High value," not "High risk / High value") — mathematically correct,
+but a customer at 1.6% churn probability is already essentially certain to
+stay, so ranking them highly overstates how actionable they are. A real
+deployment would filter to a minimum meaningful risk threshold first (e.g.
+Step 10's cost-optimal threshold) before ranking by priority score.
+
+<p>
+  <img src="reports/figures/retention_quadrant.png" width="380" alt="Risk vs value segmentation quadrant">
+  <img src="reports/figures/targeting_comparison.png" width="320" alt="Targeting strategy comparison">
+</p>
+
+Full detail, fitted model parameters, and the ranked list for all 4,323
+customers in
+[reports/clv_retention_priority_report.md](reports/clv_retention_priority_report.md)
+and `reports/retention_priority_list.csv`.
+
+---
+
+## Customer segmentation
+
+```bash
+python scripts/run_customer_segmentation.py
+```
+
+K-Means on RFM + tenure + catalogue breadth + 90-day engagement + Step 12's
+CLV estimate (Yeo-Johnson power-transformed and standardised — Euclidean
+distance is scale-sensitive the same way Step 7's linear model was).
+`rfm_score` is deliberately excluded to avoid double-counting the same signal
+its own inputs already provide.
+
+**K chosen by evidence, not convenience**: silhouette peaks at K=3 (0.363),
+but K=4 (0.330) is used instead — a stated trade-off. At K=3 the customers
+who've gone quiet form one cluster; at K=4 that splits into a **moderate-value,
+still-reachable** group and a **near-total-loss, one-time-buyer** group with a
+23-point churn-rate gap between them. Validated two ways: split-half stability
+ARI=0.957 (highly reproducible across resamples) and K-Means vs. Hierarchical
+agreement ARI=0.729 (not a K-Means-specific artifact).
+
+| Segment | Churn rate | Median CLV | Profile |
+| --- | --- | --- | --- |
+| **Champions** | 11.4% | €1,139 | Lowest recency, highest frequency/value/tenure/breadth |
+| Declining / Moderate value | 47.5% | €310 | Recency climbing, still reachable |
+| New / Developing | 41.7% | €322 | Short tenure, most history is recent by definition |
+| **Lost / One-time buyers** | 70.5% | €105 | Frequency ≈1, longest recency, hardest to influence |
+
+**Does segmentation add value beyond the supervised model?** Cross-tabulated
+against Step 12's risk/value quadrant: **ARI = 0.32** (low-to-moderate) — the
+clusters are *not* simply re-deriving that simpler 2×2 split. "Declining" and
+"New" customers, in particular, spread across three of the four quadrants
+each, showing segmentation surfaces tenure/engagement structure the risk ×
+value view alone collapses away.
+
+<p>
+  <img src="reports/figures/cluster_profile_heatmap.png" width="380" alt="Cluster profile heatmap">
+  <img src="reports/figures/cluster_churn_value.png" width="420" alt="Churn rate and CLV by cluster">
+</p>
+
+Full detail in [reports/segmentation_report.md](reports/segmentation_report.md);
+segmented list for all 4,323 customers in `reports/customer_segments.csv`.
 
 ---
 
