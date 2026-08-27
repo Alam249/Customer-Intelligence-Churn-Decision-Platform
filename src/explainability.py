@@ -56,6 +56,12 @@ from src.models.preprocessing import get_tree_output_feature_names, split_X_y_tr
 
 set_style()
 
+# Single source of truth for the risk bands — imported by api/routers/predict.py
+# rather than restated as separate literals, so the API and this module's own
+# batch explain_customer() can never quietly drift apart on what "High" means.
+DEFAULT_RISK_LOW_CUTOFF = 0.30
+DEFAULT_RISK_HIGH_CUTOFF = 0.60
+
 
 def transform_for_shap(pipeline, X: pd.DataFrame) -> pd.DataFrame:
     """Apply the pipeline's fitted preprocessor and return a labelled DataFrame
@@ -73,12 +79,18 @@ def build_explainer(pipeline) -> shap.TreeExplainer:
     return shap.TreeExplainer(pipeline.named_steps["model"])
 
 
-def compute_shap_explanation(pipeline, X: pd.DataFrame) -> tuple[shap.Explanation, pd.DataFrame]:
+def compute_shap_explanation(
+    pipeline, X: pd.DataFrame, explainer: shap.TreeExplainer | None = None
+) -> tuple[shap.Explanation, pd.DataFrame]:
     """SHAP explanation object plus the transformed (labelled) feature matrix
     it was computed against.
+
+    Pass a pre-built ``explainer`` (e.g. one cached once at API startup —
+    see api/state.py) to avoid reconstructing a `TreeExplainer` on every call;
+    if omitted, one is built fresh from ``pipeline`` as before.
     """
     X_transformed = transform_for_shap(pipeline, X)
-    explainer = build_explainer(pipeline)
+    explainer = explainer or build_explainer(pipeline)
     explanation = explainer(X_transformed)
     return explanation, X_transformed
 
@@ -136,7 +148,7 @@ def plot_shap_dependence(explanation: shap.Explanation, feature: str, name: str 
 # Local explanation
 # ---------------------------------------------------------------------------
 
-def _risk_level(probability: float, low_cutoff: float, high_cutoff: float) -> str:
+def risk_level_from_probability(probability: float, low_cutoff: float, high_cutoff: float) -> str:
     if probability >= high_cutoff:
         return "High"
     if probability >= low_cutoff:
@@ -172,9 +184,10 @@ def explain_customer(
     tuned_pipeline,
     final_model,
     top_n: int = 5,
-    risk_low_cutoff: float = 0.30,
-    risk_high_cutoff: float = 0.60,
+    risk_low_cutoff: float = DEFAULT_RISK_LOW_CUTOFF,
+    risk_high_cutoff: float = DEFAULT_RISK_HIGH_CUTOFF,
     save_plot: bool = True,
+    explainer: shap.TreeExplainer | None = None,
 ) -> dict[str, Any]:
     """Explain one customer's churn prediction — the reusable function this
     step is built around. Understandable to a Data Scientist (raw SHAP values,
@@ -186,6 +199,9 @@ def explain_customer(
         split, so the explanation is for a genuinely held-out customer).
     tuned_pipeline : the pre-calibration Step 9 XGBoost pipeline (SHAP source).
     final_model : the calibrated Step 10 model (probability source).
+    explainer : an optional pre-built `shap.TreeExplainer` (see
+        `compute_shap_explanation`) — pass one built once at startup to avoid
+        rebuilding it on every call, e.g. from a request handler.
 
     Raises
     ------
@@ -201,9 +217,9 @@ def explain_customer(
     X_row, _ = split_X_y_tree(row)
 
     probability = float(final_model.predict_proba(X_row)[:, 1][0])
-    risk = _risk_level(probability, risk_low_cutoff, risk_high_cutoff)
+    risk = risk_level_from_probability(probability, risk_low_cutoff, risk_high_cutoff)
 
-    explanation, X_transformed = compute_shap_explanation(tuned_pipeline, X_row)
+    explanation, X_transformed = compute_shap_explanation(tuned_pipeline, X_row, explainer=explainer)
     shap_values = explanation.values[0]
     feature_values = X_transformed.iloc[0]
 

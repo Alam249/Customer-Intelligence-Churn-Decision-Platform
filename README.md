@@ -27,7 +27,8 @@ exposed through a REST API and an analyst dashboard.
 | 11 | Explainable AI (SHAP) | ✅ Complete |
 | 12 | Customer Lifetime Value & Retention Priority | ✅ Complete |
 | 13 | Customer segmentation | ✅ Complete |
-| 14–17 | FastAPI, Streamlit, MLflow, Docker | ⬜ Not started |
+| 14 | FastAPI prediction service | ✅ Complete |
+| 15–17 | Streamlit, MLflow, Docker | ⬜ Not started |
 | 18–21 | Testing, monitoring, uplift, LLM layer | ⬜ Not started |
 
 ---
@@ -769,6 +770,84 @@ value view alone collapses away.
 
 Full detail in [reports/segmentation_report.md](reports/segmentation_report.md);
 segmented list for all 4,323 customers in `reports/customer_segments.csv`.
+
+---
+
+## FastAPI prediction service
+
+```bash
+uvicorn api.main:app --reload --port 8000
+```
+
+Swagger UI: http://127.0.0.1:8000/docs · ReDoc: http://127.0.0.1:8000/redoc
+
+Endpoints:
+
+| Endpoint | Method | Returns |
+| --- | --- | --- |
+| `/health` | GET | Service status, whether models are loaded, customer count |
+| `/predict` | POST | `churn_probability`, `risk_level`, `estimated_customer_value` (Step 12 CLV), `retention_priority` (Step 12 score), `segment` (Step 13) |
+| `/predict/explain` | POST | Everything `/predict` returns, plus the top SHAP risk/protective factors and a plain-English narrative |
+
+```bash
+curl -X POST http://127.0.0.1:8000/predict \
+  -H "Content-Type: application/json" -d '{"customer_id": 12346}'
+```
+
+```json
+{
+  "customer_id": 12346,
+  "churn_probability": 0.3736,
+  "risk_level": "Medium",
+  "estimated_customer_value": 32668.27,
+  "retention_priority": 12205.12,
+  "segment": "Champions (loyal, high value)"
+}
+```
+
+**Scope, stated explicitly**: the API scores the 4,323 customers already in
+the project's historical feature table (looked up by `customer_id`) — it does
+not accept arbitrary new-customer feature payloads. A live system serving
+genuinely new customers would need a real-time feature-computation pipeline
+(the SQL in `sql/build_features.sql` generalizes to that); building one is a
+separate, larger engineering task outside this project's scope. This is
+documented in `api/state.py` rather than left as a silent limitation.
+
+**Models loaded once, at startup** (`api/state.py`, via FastAPI's lifespan
+hook) — no request re-loads or re-fits anything, including the SHAP
+`TreeExplainer` itself (cached once at startup, not rebuilt per
+`/predict/explain` call). SHAP attribution reuses the pre-calibration tuned
+XGBoost pipeline (Step 9); the displayed probability comes from the
+calibrated final model (Step 10) — the same split Step 11 already
+established, not reimplemented here. `/predict/explain` calls the exact same
+`explain_customer()` function from `src/explainability.py` used in Step 11's
+batch report — one implementation, not two.
+
+**Reviewed and hardened**: a multi-dimension review (security, correctness,
+API design, error handling) with independent adversarial verification of
+every finding surfaced 9 confirmed real issues, none critical — all fixed:
+the two data-merges in `api/state.py` now use `validate="one_to_one"` so a
+future duplicate `customer_id` fails loudly at startup instead of silently
+scoring the wrong row; a present-but-corrupted model file now raises a
+specific, actionable error instead of a raw exception; `/predict` and
+`/predict/explain` now document their 404/500 responses in the OpenAPI spec;
+`ExplainResponse`'s documented example now shows its own fields instead of
+inheriting `PredictResponse`'s; the risk-band cutoffs (0.30/0.60) are now a
+single constant in `src/explainability.py` imported by the API rather than
+restated as separate literals; and the no-auth/no-rate-limit design is now an
+explicit, stated scope decision (portfolio demo, public dataset, no real PII)
+in `api/main.py`'s docstring rather than a silent gap.
+
+**Testing**:
+
+```bash
+pytest tests/test_api.py -v
+```
+
+12 tests, including one that asserts the live API's prediction for a known
+customer matches (within 1e-3) the value already computed offline by Step
+12's batch pipeline — the API is checked against the project's own prior
+results, not just for "a plausible-looking response."
 
 ---
 

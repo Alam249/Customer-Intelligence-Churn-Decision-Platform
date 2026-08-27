@@ -56,3 +56,4 @@ coverage.xml
 Thumbs.db
 .idea/
 .vscode/
+.claude/
