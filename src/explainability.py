@@ -50,7 +50,6 @@ import numpy as np
 import pandas as pd
 import shap
 
-from src.config import PATHS
 from src.eda import CHURN_COLORS, INK, SEQUENTIAL_BLUE, save_figure, set_style
 from src.models.preprocessing import get_tree_output_feature_names, split_X_y_tree
 
@@ -98,6 +97,7 @@ def compute_shap_explanation(
 # ---------------------------------------------------------------------------
 # Global explanations
 # ---------------------------------------------------------------------------
+
 
 def plot_shap_summary(explanation: shap.Explanation, name: str = "shap_summary") -> Path:
     """Beeswarm plot: every test customer, every feature, coloured by that
@@ -147,6 +147,7 @@ def plot_shap_dependence(explanation: shap.Explanation, feature: str, name: str 
 # ---------------------------------------------------------------------------
 # Local explanation
 # ---------------------------------------------------------------------------
+
 
 def risk_level_from_probability(probability: float, low_cutoff: float, high_cutoff: float) -> str:
     if probability >= high_cutoff:
@@ -223,12 +224,16 @@ def explain_customer(
     shap_values = explanation.values[0]
     feature_values = X_transformed.iloc[0]
 
-    factors = pd.DataFrame({
-        "label": [f"{f} = {v:.3g}" for f, v in zip(explanation.feature_names, feature_values)],
-        "feature": explanation.feature_names,
-        "value": feature_values.values,
-        "shap_value": shap_values,
-    }).sort_values("shap_value", ascending=False)
+    factors = pd.DataFrame(
+        {
+            "label": [
+                f"{f} = {v:.3g}" for f, v in zip(explanation.feature_names, feature_values, strict=True)
+            ],
+            "feature": explanation.feature_names,
+            "value": feature_values.values,
+            "shap_value": shap_values,
+        }
+    ).sort_values("shap_value", ascending=False)
 
     top_risk = factors[factors["shap_value"] > 0].head(top_n)
     top_protective = factors[factors["shap_value"] < 0].sort_values("shap_value").head(top_n)

@@ -18,7 +18,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import numpy as np  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.metrics import adjusted_rand_score  # noqa: E402
 
@@ -77,10 +76,8 @@ def main() -> int:
 
     plot_elbow_silhouette(scan, CHOSEN_K)
 
-    logger.info("Fitting K-Means at K=%d (chosen) and K=%d (silhouette-best) for comparison",
-                CHOSEN_K, silhouette_best_k)
+    logger.info("Fitting K-Means at K=%d (chosen; silhouette peaks at K=%d)", CHOSEN_K, silhouette_best_k)
     km_chosen = fit_kmeans(X, CHOSEN_K)
-    km_silhouette_best = fit_kmeans(X, silhouette_best_k) if silhouette_best_k != CHOSEN_K else km_chosen
 
     stability = check_stability(X, CHOSEN_K, n_splits=5)
     logger.info("Split-half stability at K=%d: ARI=%.4f", CHOSEN_K, stability)
@@ -99,7 +96,9 @@ def main() -> int:
     plot_cluster_churn_and_value(df)
 
     df.sort_values("cluster")[
-        ["customer_id", "cluster", "segment_name"] + SEGMENTATION_FEATURES + ["is_churned", "churn_probability"]
+        ["customer_id", "cluster", "segment_name"]
+        + SEGMENTATION_FEATURES
+        + ["is_churned", "churn_probability"]
     ].to_csv(SEGMENTED_LIST_PATH, index=False)
     logger.info("Saved segmented customer list: %s", SEGMENTED_LIST_PATH.relative_to(PATHS.root))
 
@@ -108,12 +107,12 @@ def main() -> int:
     # if they're nearly identical, segmentation mostly re-derives what churn
     # probability x CLV already showed; if not, it's adding structure the
     # supervised model doesn't directly expose.
-    priority_full = pd.read_csv(priority_path)[["customer_id", "segment"]].rename(columns={"segment": "rp_segment"})
+    priority_full = pd.read_csv(priority_path)[["customer_id", "segment"]].rename(
+        columns={"segment": "rp_segment"}
+    )
     df = df.merge(priority_full, on="customer_id", how="left")
     crosstab = pd.crosstab(df["segment_name"], df["rp_segment"])
-    cluster_vs_rp_ari = adjusted_rand_score(
-        df["cluster"], df["rp_segment"].astype("category").cat.codes
-    )
+    cluster_vs_rp_ari = adjusted_rand_score(df["cluster"], df["rp_segment"].astype("category").cat.codes)
     logger.info("Cluster vs. Step 12 risk/value quadrant agreement: ARI=%.4f", cluster_vs_rp_ari)
 
     # --- Report ---
@@ -130,7 +129,7 @@ def main() -> int:
         "## Features and preprocessing",
         "",
         f"`{', '.join(SEGMENTATION_FEATURES)}` — RFM core, tenure, catalogue breadth (the closest "
-        "\"service usage\" proxy this dataset supports), a 90-day engagement/trend signal, and Step "
+        '"service usage" proxy this dataset supports), a 90-day engagement/trend signal, and Step '
         "12's CLV estimate. All complete for the full population (verified before building this "
         "module — no imputation needed). Yeo-Johnson power transform + standardisation before "
         "clustering: K-Means uses Euclidean distance, so the same skew that distorted Step 7's linear "
@@ -147,7 +146,7 @@ def main() -> int:
         f"Silhouette peaks at **K={silhouette_best_k}** ({scan['silhouette'].max():.4f}). This project "
         f"uses **K={CHOSEN_K}** instead ({scan.loc[scan['k'] == CHOSEN_K, 'silhouette'].values[0]:.4f} "
         "silhouette, only modestly lower) — a deliberate, stated trade-off: at K=3, the customers who "
-        "have gone quiet form a single \"at-risk\" cluster; at K=4 that cluster splits into a "
+        'have gone quiet form a single "at-risk" cluster; at K=4 that cluster splits into a '
         "**moderate-value, still-somewhat-engaged** group and a **near-total-loss, one-time-buyer** "
         "group with a 23-point churn-rate gap between them (measured below) — a genuinely different "
         "retention response for each, not a marginal or spurious split. Choosing K purely by maximum "
@@ -201,7 +200,7 @@ def main() -> int:
             "added value here is less about discovering NEW structure and more about **resolution and "
             "communication** — turning a continuous churn probability x CLV scatter into a small "
             "number of named, profiled groups a non-technical stakeholder can act on directly (e.g. "
-            "\"run the win-back campaign on the Declining segment\") without needing to interpret "
+            '"run the win-back campaign on the Declining segment") without needing to interpret '
             "model scores."
         )
     else:

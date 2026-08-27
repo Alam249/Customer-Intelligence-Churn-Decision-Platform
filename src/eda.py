@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Any
 
 import matplotlib.pyplot as plt
-import numpy as np
 import pandas as pd
 import seaborn as sns
 from scipy import stats
@@ -76,6 +75,7 @@ def save_figure(fig: plt.Figure, name: str) -> Path:
 # Target
 # ---------------------------------------------------------------------------
 
+
 def plot_target_balance(y: pd.Series, name: str = "target_balance") -> Path:
     """Horizontal bar of class counts with the rate labelled directly on each bar."""
     counts = y.value_counts().sort_index()
@@ -85,9 +85,16 @@ def plot_target_balance(y: pd.Series, name: str = "target_balance") -> Path:
 
     fig, ax = plt.subplots(figsize=(6, 2.2))
     bars = ax.barh(labels, counts.values, color=colors, height=0.55)
-    for bar, c, p in zip(bars, counts.values, pct.values):
-        ax.text(bar.get_width() + counts.max() * 0.02, bar.get_y() + bar.get_height() / 2,
-                 f"{c:,} ({p:.1f}%)", va="center", ha="left", color=INK["primary"], fontsize=10)
+    for bar, c, p in zip(bars, counts.values, pct.values, strict=True):
+        ax.text(
+            bar.get_width() + counts.max() * 0.02,
+            bar.get_y() + bar.get_height() / 2,
+            f"{c:,} ({p:.1f}%)",
+            va="center",
+            ha="left",
+            color=INK["primary"],
+            fontsize=10,
+        )
     ax.set_xlim(0, counts.max() * 1.25)
     ax.set_xlabel("Customers")
     ax.set_title("Churn label distribution (183-day horizon, cutoff 2011-06-09)")
@@ -100,14 +107,26 @@ def plot_target_balance(y: pd.Series, name: str = "target_balance") -> Path:
 # Numerical features vs churn
 # ---------------------------------------------------------------------------
 
-def plot_numeric_by_churn(df: pd.DataFrame, column: str, target: str = "is_churned",
-                           log_scale: bool = False, name: str | None = None) -> Path:
+
+def plot_numeric_by_churn(
+    df: pd.DataFrame,
+    column: str,
+    target: str = "is_churned",
+    log_scale: bool = False,
+    name: str | None = None,
+) -> Path:
     """Box plot of a numeric feature split by churn, with the two fixed churn colours."""
     fig, ax = plt.subplots(figsize=(5.5, 3.8))
     data = [df.loc[~df[target], column].dropna(), df.loc[df[target], column].dropna()]
-    bp = ax.boxplot(data, labels=["Retained", "Churned"], patch_artist=True, widths=0.5,
-                     showfliers=True, flierprops={"markersize": 3, "alpha": 0.4})
-    for patch, color in zip(bp["boxes"], [CHURN_COLORS[False], CHURN_COLORS[True]]):
+    bp = ax.boxplot(
+        data,
+        labels=["Retained", "Churned"],
+        patch_artist=True,
+        widths=0.5,
+        showfliers=True,
+        flierprops={"markersize": 3, "alpha": 0.4},
+    )
+    for patch, color in zip(bp["boxes"], [CHURN_COLORS[False], CHURN_COLORS[True]], strict=True):
         patch.set_facecolor(color)
         patch.set_alpha(0.75)
         patch.set_edgecolor(INK["primary"])
@@ -122,8 +141,9 @@ def plot_numeric_by_churn(df: pd.DataFrame, column: str, target: str = "is_churn
     return save_figure(fig, name or f"box_{column}_by_churn")
 
 
-def plot_binned_churn_rate(df: pd.DataFrame, column: str, target: str = "is_churned",
-                            bins: int = 5, name: str | None = None) -> tuple[Path, pd.DataFrame]:
+def plot_binned_churn_rate(
+    df: pd.DataFrame, column: str, target: str = "is_churned", bins: int = 5, name: str | None = None
+) -> tuple[Path, pd.DataFrame]:
     """Churn rate across equal-sized quantile bins of a numeric feature.
 
     Reveals monotonic (or non-monotonic) relationships that a single correlation
@@ -140,8 +160,15 @@ def plot_binned_churn_rate(df: pd.DataFrame, column: str, target: str = "is_chur
     ax.bar(labels, table["churn_rate"] * 100, color=SEQUENTIAL_BLUE)
     overall = df[target].mean() * 100
     ax.axhline(overall, color=INK["secondary"], linestyle="--", linewidth=1)
-    ax.text(len(table) - 0.5, overall, f" overall {overall:.1f}%", color=INK["secondary"],
-            fontsize=9, va="bottom", ha="right")
+    ax.text(
+        len(table) - 0.5,
+        overall,
+        f" overall {overall:.1f}%",
+        color=INK["secondary"],
+        fontsize=9,
+        va="bottom",
+        ha="right",
+    )
     ax.set_xlabel(f"{column} (quantile bins, low -> high)")
     ax.set_ylabel("Churn rate (%)")
     ax.set_title(f"Churn rate by {column}")
@@ -155,9 +182,15 @@ def plot_binned_churn_rate(df: pd.DataFrame, column: str, target: str = "is_chur
 # Categorical features vs churn
 # ---------------------------------------------------------------------------
 
-def plot_categorical_churn_rate(df: pd.DataFrame, column: str, target: str = "is_churned",
-                                 top_n: int = 8, min_count: int = 15,
-                                 name: str | None = None) -> Path:
+
+def plot_categorical_churn_rate(
+    df: pd.DataFrame,
+    column: str,
+    target: str = "is_churned",
+    top_n: int = 8,
+    min_count: int = 15,
+    name: str | None = None,
+) -> Path:
     """Churn rate per category, ordered by rate, restricted to categories with
     enough customers that the rate is not noise. Sample size is shown on each bar
     so a reader cannot mistake a 2-customer category for a robust signal.
@@ -172,9 +205,15 @@ def plot_categorical_churn_rate(df: pd.DataFrame, column: str, target: str = "is
     overall = df[target].mean() * 100
     ax.axvline(overall, color=INK["secondary"], linestyle="--", linewidth=1)
     ax.text(overall, len(rates) - 0.3, f" overall {overall:.1f}%", color=INK["secondary"], fontsize=9)
-    for bar, n in zip(bars, sizes.values):
-        ax.text(bar.get_width() + 1, bar.get_y() + bar.get_height() / 2, f"n={n}",
-                 va="center", fontsize=8.5, color=INK["muted"])
+    for bar, n in zip(bars, sizes.values, strict=True):
+        ax.text(
+            bar.get_width() + 1,
+            bar.get_y() + bar.get_height() / 2,
+            f"n={n}",
+            va="center",
+            fontsize=8.5,
+            color=INK["muted"],
+        )
     ax.set_xlabel("Churn rate (%)")
     ax.set_title(f"Churn rate by {column} (categories with >= {min_count} customers)")
     fig.tight_layout()
@@ -185,14 +224,27 @@ def plot_categorical_churn_rate(df: pd.DataFrame, column: str, target: str = "is
 # Correlation
 # ---------------------------------------------------------------------------
 
+
 def plot_correlation_heatmap(df: pd.DataFrame, columns: list[str], name: str = "correlation_heatmap") -> Path:
     """Diverging blue/red heatmap of pairwise Pearson correlation, gray at zero."""
     corr = df[columns].corr()
     cmap = sns.diverging_palette(220, 15, s=70, l=50, sep=10, as_cmap=True, center="light")
     fig, ax = plt.subplots(figsize=(0.55 * len(columns) + 2, 0.55 * len(columns) + 1))
-    sns.heatmap(corr, cmap=cmap, vmin=-1, vmax=1, center=0, square=True, linewidths=0.5,
-                linecolor=SURFACE, cbar_kws={"shrink": 0.7, "label": "Pearson r"}, ax=ax,
-                annot=len(columns) <= 12, fmt=".2f", annot_kws={"fontsize": 7})
+    sns.heatmap(
+        corr,
+        cmap=cmap,
+        vmin=-1,
+        vmax=1,
+        center=0,
+        square=True,
+        linewidths=0.5,
+        linecolor=SURFACE,
+        cbar_kws={"shrink": 0.7, "label": "Pearson r"},
+        ax=ax,
+        annot=len(columns) <= 12,
+        fmt=".2f",
+        annot_kws={"fontsize": 7},
+    )
     ax.set_title("Feature correlation matrix")
     plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
     fig.tight_layout()
@@ -202,6 +254,7 @@ def plot_correlation_heatmap(df: pd.DataFrame, columns: list[str], name: str = "
 # ---------------------------------------------------------------------------
 # Statistical tests
 # ---------------------------------------------------------------------------
+
 
 def mannwhitney_by_churn(df: pd.DataFrame, column: str, target: str = "is_churned") -> dict[str, Any]:
     """Mann-Whitney U test: does a numeric feature's distribution differ by churn?
@@ -223,8 +276,9 @@ def mannwhitney_by_churn(df: pd.DataFrame, column: str, target: str = "is_churne
     }
 
 
-def chi2_by_churn(df: pd.DataFrame, column: str, target: str = "is_churned",
-                   min_count: int = 15) -> dict[str, Any]:
+def chi2_by_churn(
+    df: pd.DataFrame, column: str, target: str = "is_churned", min_count: int = 15
+) -> dict[str, Any]:
     """Chi-square test of independence between a category and churn.
 
     Rare categories (fewer than ``min_count`` customers) are pooled into 'Other'

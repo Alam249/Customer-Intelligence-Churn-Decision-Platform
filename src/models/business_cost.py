@@ -78,8 +78,10 @@ def cost_at_threshold(y_true, y_proba, threshold: float, assumptions: BusinessCo
     tn = int(((pred == 0) & (y_true == 0)).sum())
 
     total_cost = (
-        tp * assumptions.cost_tp + fp * assumptions.cost_fp
-        + fn * assumptions.cost_fn + tn * assumptions.cost_tn
+        tp * assumptions.cost_tp
+        + fp * assumptions.cost_fp
+        + fn * assumptions.cost_fn
+        + tn * assumptions.cost_tn
     )
     # Net value relative to a "do nothing, contact no one" policy, whose cost
     # is n_actual_positives * cost_fn (everyone who churns is a missed
@@ -88,7 +90,11 @@ def cost_at_threshold(y_true, y_proba, threshold: float, assumptions: BusinessCo
     net_value_vs_doing_nothing = do_nothing_cost - total_cost
 
     return {
-        "threshold": round(threshold, 3), "tp": tp, "fp": fp, "fn": fn, "tn": tn,
+        "threshold": round(threshold, 3),
+        "tp": tp,
+        "fp": fp,
+        "fn": fn,
+        "tn": tn,
         "total_cost": round(total_cost, 2),
         "net_value_vs_doing_nothing": round(net_value_vs_doing_nothing, 2),
     }

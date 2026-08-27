@@ -3,7 +3,8 @@
 
 # ---- Core data stack ----
 pandas==2.1.4
-numpy==1.24.4
+numpy==1.26.4   # bumped from 1.24.4: mlflow's dependency resolution requires it;
+                # re-verified all 12 API tests and the full pipeline still pass at this version
 scipy==1.11.4
 pyarrow==14.0.2          # parquet I/O for data/interim and data/processed
 
@@ -44,6 +45,26 @@ uvicorn[standard]==0.34.0
 pytest==8.3.4
 httpx==0.28.1   # required by fastapi.testclient.TestClient
 
-# NOTE: packages for later steps are added as those steps are implemented,
-# so the environment stays minimal and installable at every commit.
-# Planned additions: mlflow, streamlit, evidently, ruff, black.
+# ---- Dashboard (Step 15) ----
+streamlit==1.40.2
+
+# ---- Experiment tracking (Step 16) ----
+mlflow==3.15.2
+
+# ---- Code quality (Step 18) ----
+ruff==0.16.5
+black==26.5.1
+
+# NOTE: Step 19 (drift monitoring) needed no new dependency — PSI and the
+# KS test are implemented directly on scipy (already pinned above) rather
+# than via a monitoring framework like Evidently, whose dependency footprint
+# (a full web framework, telemetry, an NLP toolkit) is disproportionate to
+# two well-defined statistics over two dataframes. See src/monitoring.py.
+#
+# NOTE: Step 20 (uplift modeling) also needed no new dependency — S-/T-/X-
+# learner and Qini/AUUC are implemented directly on scikit-learn (already
+# pinned above: RandomForestClassifier/Regressor, KFold) rather than via
+# `causalml`/`econml`/`scikit-uplift`, for the same reason. See src/uplift.py.
+#
+# Packages for later steps are added as those steps are implemented, so the
+# environment stays minimal and installable at every commit.

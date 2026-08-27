@@ -1,0 +1,52 @@
+# Build context exclusions — mirrors .gitignore's spirit plus a few things
+# that ARE git-tracked (figures, notebooks) but aren't needed to serve the
+# API/dashboard and would only slow the build down.
+
+# ---- Version control / tooling ----
+.git
+.github
+.claude
+.idea
+.vscode
+.DS_Store
+
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# ---- Data, models, experiment tracking (mounted as volumes, not baked in) ----
+data/
+models/
+reports/
+mlruns/
+mlartifacts/
+mlflow.db
+logs/
+*.zip
+
+# ---- Notebooks (not needed to serve) ----
+notebooks/
+*.ipynb
+.ipynb_checkpoints/
+
+# ---- Secrets ----
+.env
+.env.*
+!.env.example
+
+# ---- Docker itself ----
+Dockerfile
+docker-compose.yml
+.dockerignore

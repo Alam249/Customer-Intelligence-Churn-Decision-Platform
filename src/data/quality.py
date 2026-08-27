@@ -16,17 +16,15 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-
 # ---------------------------------------------------------------------------
 # Structural checks
 # ---------------------------------------------------------------------------
 
+
 def missing_value_report(df: pd.DataFrame) -> pd.DataFrame:
     """Count and percentage of missing values per column, worst first."""
     n_missing = df.isna().sum()
-    report = pd.DataFrame(
-        {"n_missing": n_missing, "pct_missing": (n_missing / len(df) * 100).round(2)}
-    )
+    report = pd.DataFrame({"n_missing": n_missing, "pct_missing": (n_missing / len(df) * 100).round(2)})
     return report[report["n_missing"] > 0].sort_values("pct_missing", ascending=False)
 
 
@@ -57,6 +55,7 @@ def dtype_report(df: pd.DataFrame) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # Value-level checks
 # ---------------------------------------------------------------------------
+
 
 def impossible_value_report(df: pd.DataFrame, rules: dict[str, str]) -> pd.DataFrame:
     """Count violations of caller-supplied validity rules.
@@ -104,6 +103,7 @@ def date_consistency_report(
 # Distribution checks
 # ---------------------------------------------------------------------------
 
+
 def numeric_summary(df: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
     """describe() plus skewness and a negative-value count, for the columns given."""
     desc = df[columns].describe().T
@@ -141,6 +141,7 @@ def iqr_outlier_report(df: pd.DataFrame, columns: list[str], k: float = 1.5) -> 
 # ---------------------------------------------------------------------------
 # Target / leakage checks
 # ---------------------------------------------------------------------------
+
 
 def target_distribution(y: pd.Series) -> pd.DataFrame:
     """Class counts and the imbalance ratio (majority : minority)."""
@@ -204,6 +205,7 @@ def highly_correlated_pairs(df: pd.DataFrame, columns: list[str], threshold: flo
 # Cleaning — explicit, documented, separate from detection
 # ---------------------------------------------------------------------------
 
+
 def clean_customer_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
     """Apply the treatments decided in reports/data_quality_report.md.
 
@@ -249,8 +251,7 @@ def clean_customer_features(df: pd.DataFrame) -> tuple[pd.DataFrame, list[dict[s
                     "column": "return_rate",
                     "issue": f"{n_extreme} customers with return_rate > 1.0 (returns exceed "
                     "in-window purchases)",
-                    "treatment": "capped at 1.0 for modelling; original preserved in "
-                    "'return_rate_raw'",
+                    "treatment": "capped at 1.0 for modelling; original preserved in " "'return_rate_raw'",
                 }
             )
 

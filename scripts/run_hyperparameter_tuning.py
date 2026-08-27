@@ -16,6 +16,11 @@ random draws at a comparable trial budget.
 The test set is touched exactly ONCE, after the search is complete, to
 evaluate the single final tuned model — never during search.
 
+Logged to MLflow (Step 16): a parent run for the final tuned model (params,
+metrics, the optuna trial history as an artifact, the model itself), with
+every individual trial logged as a nested child run for full search
+visibility — logged after the fact from Optuna's own results, not retrained.
+
 Run:
     python scripts/run_hyperparameter_tuning.py
 """
@@ -28,6 +33,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import joblib  # noqa: E402
+import mlflow  # noqa: E402
+import mlflow.sklearn  # noqa: E402
 import optuna  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.pipeline import Pipeline  # noqa: E402
@@ -40,12 +47,14 @@ from src.models.preprocessing import build_tree_preprocessor, split_X_y_tree  # 
 from src.models.tuning import SEARCH_SPACE_DESCRIPTION, build_objective  # noqa: E402
 from src.utils.logging import get_logger  # noqa: E402
 from src.utils.report import md_table  # noqa: E402
+from src.utils.tracking import init_experiment  # noqa: E402
 
 logger = get_logger(__name__)
 
 N_TRIALS = 50
 N_CV_SPLITS = 5
 SCORING = "average_precision"  # PR-AUC — see the report for why, not ROC-AUC
+CLOUDPICKLE = mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE  # see Step 7's note on why not skops
 
 REPORT_PATH = PATHS.reports / "hyperparameter_tuning_report.md"
 TRIALS_PATH = PATHS.reports / "optuna_trials.csv"
@@ -70,166 +79,228 @@ def main() -> int:
 
     n_neg, n_pos = (y_train == 0).sum(), (y_train == 1).sum()
     scale_pos_weight = n_neg / n_pos
-    logger.info("Train: %d rows | Test: %d rows | scale_pos_weight=%.3f", len(X_train), len(X_test), scale_pos_weight)
-
-    objective = build_objective(
-        X_train, y_train, scale_pos_weight,
-        n_splits=N_CV_SPLITS, scoring=SCORING, random_state=RANDOM_SEED,
+    logger.info(
+        "Train: %d rows | Test: %d rows | scale_pos_weight=%.3f", len(X_train), len(X_test), scale_pos_weight
     )
 
-    logger.info("Starting Optuna search: %d trials, %d-fold stratified CV, scoring=%s", N_TRIALS, N_CV_SPLITS, SCORING)
-    optuna.logging.set_verbosity(optuna.logging.WARNING)  # keep our own logger's output readable
-    sampler = optuna.samplers.TPESampler(seed=RANDOM_SEED)
-    study = optuna.create_study(direction="maximize", sampler=sampler)
-    study.optimize(objective, n_trials=N_TRIALS, show_progress_bar=False)
+    init_experiment()
+    with mlflow.start_run(run_name="xgboost_tuned"):
+        mlflow.log_params(
+            {
+                "search_method": "optuna_tpe",
+                "n_trials": N_TRIALS,
+                "cv_folds": N_CV_SPLITS,
+                "cv_scoring": SCORING,
+                "scale_pos_weight": round(scale_pos_weight, 4),
+                "random_state": RANDOM_SEED,
+            }
+        )
 
-    logger.info("Best CV %s: %.4f | params: %s", SCORING, study.best_value, study.best_params)
-
-    trials_df = study.trials_dataframe()
-    PATHS.reports.mkdir(parents=True, exist_ok=True)
-    trials_df.to_csv(TRIALS_PATH, index=False)
-    logger.info("Saved %d trial results: %s", len(trials_df), TRIALS_PATH.relative_to(PATHS.root))
-
-    plot_optimization_history(trials_df["value"].tolist())
-
-    # --- Retrain the final model on the full training split with the best params ---
-    tuned_pipeline = Pipeline([
-        ("preprocess", build_tree_preprocessor()),
-        ("model", XGBClassifier(
-            **study.best_params,
-            scale_pos_weight=scale_pos_weight,
+        objective = build_objective(
+            X_train,
+            y_train,
+            scale_pos_weight,
+            n_splits=N_CV_SPLITS,
+            scoring=SCORING,
             random_state=RANDOM_SEED,
-            eval_metric="logloss",
-            n_jobs=-1,
-        )),
-    ])
+        )
 
-    # Test set touched here for the first and only time.
-    tuned_result = evaluate_model("XGBoost (tuned)", tuned_pipeline, X_train, y_train, X_test, y_test)
+        logger.info(
+            "Starting Optuna search: %d trials, %d-fold stratified CV, scoring=%s",
+            N_TRIALS,
+            N_CV_SPLITS,
+            SCORING,
+        )
+        optuna.logging.set_verbosity(optuna.logging.WARNING)  # keep our own logger's output readable
+        sampler = optuna.samplers.TPESampler(seed=RANDOM_SEED)
+        study = optuna.create_study(direction="maximize", sampler=sampler)
+        study.optimize(objective, n_trials=N_TRIALS, show_progress_bar=False)
 
-    untuned_pipeline = joblib.load(UNTUNED_MODEL_PATH)
-    untuned_result = evaluate_model("XGBoost (untuned)", untuned_pipeline, X_train, y_train, X_test, y_test, already_fitted=True)
+        logger.info("Best CV %s: %.4f | params: %s", SCORING, study.best_value, study.best_params)
 
-    results = [untuned_result, tuned_result]
-    comparison_table = build_comparison_table(results)
+        trials_df = study.trials_dataframe()
+        PATHS.reports.mkdir(parents=True, exist_ok=True)
+        trials_df.to_csv(TRIALS_PATH, index=False)
+        logger.info("Saved %d trial results: %s", len(trials_df), TRIALS_PATH.relative_to(PATHS.root))
 
-    # Distinct filename from Step 8's model-comparison chart of the same helper
-    # function — reusing "roc_comparison" here would silently overwrite it.
-    plot_roc_comparison({r["name"]: (y_test, r["test_proba"]) for r in results}, name="roc_comparison_tuning")
+        # Each trial logged as a nested child run for full search visibility —
+        # replaying Optuna's own already-computed results, not retraining.
+        param_cols = [c for c in trials_df.columns if c.startswith("params_")]
+        for _, trial_row in trials_df.iterrows():
+            if trial_row["state"] != "COMPLETE":
+                continue
+            with mlflow.start_run(run_name=f"trial_{int(trial_row['number'])}", nested=True):
+                mlflow.log_params({c.removeprefix("params_"): trial_row[c] for c in param_cols})
+                mlflow.log_metric(SCORING, trial_row["value"])
 
-    PATHS.models.mkdir(parents=True, exist_ok=True)
-    joblib.dump(tuned_pipeline, TUNED_MODEL_PATH)
-    logger.info("Saved tuned model: %s", TUNED_MODEL_PATH.relative_to(PATHS.root))
+        history_path = plot_optimization_history(trials_df["value"].tolist())
 
-    for r in results:
-        logger.info("%-20s test ROC-AUC=%.4f  PR-AUC=%.4f  (overfit gap=%.4f)",
-                     r["name"], r["test_metrics"]["roc_auc"], r["test_metrics"]["pr_auc"],
-                     r["train_metrics"]["roc_auc"] - r["test_metrics"]["roc_auc"])
+        # --- Retrain the final model on the full training split with the best params ---
+        tuned_pipeline = Pipeline(
+            [
+                ("preprocess", build_tree_preprocessor()),
+                (
+                    "model",
+                    XGBClassifier(
+                        **study.best_params,
+                        scale_pos_weight=scale_pos_weight,
+                        random_state=RANDOM_SEED,
+                        eval_metric="logloss",
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        )
 
-    # --- Report ---
-    untuned_gap = untuned_result["train_metrics"]["roc_auc"] - untuned_result["test_metrics"]["roc_auc"]
-    tuned_gap = tuned_result["train_metrics"]["roc_auc"] - tuned_result["test_metrics"]["roc_auc"]
-    gap_closed = untuned_gap - tuned_gap
-    lr_test_roc_auc = 0.8018  # Step 7/8 baseline, held fixed across the project (loaded model unchanged)
-    tuned_beats_lr = tuned_result["test_metrics"]["roc_auc"] > lr_test_roc_auc
+        # Test set touched here for the first and only time.
+        tuned_result = evaluate_model("XGBoost (tuned)", tuned_pipeline, X_train, y_train, X_test, y_test)
 
-    search_space_table = pd.DataFrame(
-        [{"parameter": k, "range": v} for k, v in SEARCH_SPACE_DESCRIPTION.items()]
-    )
+        untuned_pipeline = joblib.load(UNTUNED_MODEL_PATH)
+        untuned_result = evaluate_model(
+            "XGBoost (untuned)", untuned_pipeline, X_train, y_train, X_test, y_test, already_fitted=True
+        )
 
-    top_trials = trials_df.sort_values("value", ascending=False).head(5)
-    param_cols = [c for c in trials_df.columns if c.startswith("params_")]
-    top_trials_display = top_trials[["number", "value"] + param_cols].round(4)
+        results = [untuned_result, tuned_result]
+        comparison_table = build_comparison_table(results)
 
-    report = [
-        "# Hyperparameter Tuning Report — XGBoost",
-        "",
-        "Generated by `scripts/run_hyperparameter_tuning.py`. All numbers are measured; the test "
-        "set was evaluated exactly once, after the search finished.",
-        "",
-        "## Why XGBoost, and why now",
-        "",
-        f"Step 8 found XGBoost overfitting substantially with default hyperparameters (train-test "
-        f"ROC-AUC gap of 0.232) while the untuned Logistic Regression baseline won on test "
-        f"performance (0.8018 vs. 0.7679 ROC-AUC). This step asks the question Step 8 left open: "
-        f"does proper regularisation let XGBoost close that gap and beat the baseline?",
-        "",
-        "## Metric choice: PR-AUC (average precision), not ROC-AUC",
-        "",
-        "The search optimises **average precision (PR-AUC)** across cross-validation folds, not "
-        "ROC-AUC. Under the mild class imbalance here (42.5%/57.5%), ROC-AUC can improve almost "
-        "entirely via better separation among confidently-retained customers — the tail of the "
-        "distribution nobody acts on. PR-AUC is driven by how well the model ranks and separates "
-        "the positive (churn) class specifically, which is what actually determines the quality of "
-        "the retention-priority list in Step 12. ROC-AUC is still reported for comparability with "
-        "every earlier step, but it is not what the search chases.",
-        "",
-        "## Search setup",
-        "",
-        f"- **Method**: Optuna, TPE sampler, {N_TRIALS} trials, `random_state={RANDOM_SEED}`.",
-        f"- **Validation**: Stratified {N_CV_SPLITS}-fold cross-validation on the TRAINING split "
-        f"only ({len(X_train):,} rows) — the test split ({len(X_test):,} rows) is not used until "
-        f"the final evaluation below.",
-        f"- **`scale_pos_weight`** is fixed at {scale_pos_weight:.3f} (the training class ratio, "
-        f"same as Step 8) rather than searched — it corrects class imbalance and is not a "
-        f"model-capacity parameter, so tuning it alongside capacity/regularisation parameters "
-        f"would conflate two different problems.",
-        "",
-        "## Search space",
-        "",
-        "Every parameter searched directly controls model capacity or regularisation — a targeted "
-        "response to Step 8's diagnosed overfitting, not a generic hyperparameter sweep:",
-        "",
-        md_table(search_space_table, index=False),
-        "",
-        "## Top 5 trials by CV score",
-        "",
-        md_table(top_trials_display, index=False),
-        "",
-        f"The search converged early — the running-best score reached {study.best_value:.4f} by "
-        f"trial 4 and never meaningfully improved over the remaining {N_TRIALS - 4} trials (see "
-        f"`reports/figures/optuna_history.png`), so the {N_TRIALS}-trial budget was sufficient; "
-        f"more trials would not have found a materially better configuration.",
-        "",
-        f"**Best CV {SCORING}: {study.best_value:.4f}**, with parameters:",
-        "",
-        "```",
-        *[f"{k}: {v}" for k, v in study.best_params.items()],
-        "```",
-        "",
-        "## Tuned vs. untuned: did tuning genuinely improve generalisation?",
-        "",
-        md_table(comparison_table),
-        "",
-        f"- Untuned XGBoost overfit gap (train − test ROC-AUC): **{untuned_gap:.4f}**",
-        f"- Tuned XGBoost overfit gap: **{tuned_gap:.4f}**",
-        f"- Gap closed: **{gap_closed:.4f}** "
-        f"({'the tuned model generalises meaningfully better' if gap_closed > 0.05 else 'a modest reduction' if gap_closed > 0 else 'no improvement — the gap did not shrink'})",
-        "",
-        f"## Does the tuned model beat the Logistic Regression baseline?",
-        "",
-        f"Logistic Regression (Step 7/8, unchanged): test ROC-AUC 0.8018. Tuned XGBoost: test "
-        f"ROC-AUC {tuned_result['test_metrics']['roc_auc']:.4f}. "
-        + (f"**Yes — the tuned model beats the baseline** by "
-           f"{tuned_result['test_metrics']['roc_auc'] - lr_test_roc_auc:+.4f} ROC-AUC, "
-           f"achieved through regularisation rather than raw model complexity."
-           if tuned_beats_lr else
-           f"**No — the baseline still wins** by "
-           f"{lr_test_roc_auc - tuned_result['test_metrics']['roc_auc']:+.4f} ROC-AUC even after "
-           f"tuning. On a dataset this size (3,458 training rows), a well-regularised linear model "
-           f"remains a legitimate, competitive choice — this is reported as the actual result, not "
-           f"adjusted to fit an expectation that tuning must produce a winner."),
-        "",
-        "## Note on evaluation discipline",
-        "",
-        "The test set was scored exactly once for the tuned model and once for the untuned model "
-        "(both loaded/retrained and evaluated in this single script run) — never during the 50-trial "
-        "search itself, which only ever saw cross-validation folds carved out of the training split.",
-        "",
-    ]
+        # Distinct filename from Step 8's model-comparison chart of the same helper
+        # function — reusing "roc_comparison" here would silently overwrite it.
+        roc_path = plot_roc_comparison(
+            {r["name"]: (y_test, r["test_proba"]) for r in results}, name="roc_comparison_tuning"
+        )
 
-    REPORT_PATH.write_text("\n".join(report), encoding="utf-8")
-    logger.info("Wrote report: %s", REPORT_PATH.relative_to(PATHS.root))
+        PATHS.models.mkdir(parents=True, exist_ok=True)
+        joblib.dump(tuned_pipeline, TUNED_MODEL_PATH)
+        logger.info("Saved tuned model: %s", TUNED_MODEL_PATH.relative_to(PATHS.root))
+
+        for r in results:
+            logger.info(
+                "%-20s test ROC-AUC=%.4f  PR-AUC=%.4f  (overfit gap=%.4f)",
+                r["name"],
+                r["test_metrics"]["roc_auc"],
+                r["test_metrics"]["pr_auc"],
+                r["train_metrics"]["roc_auc"] - r["test_metrics"]["roc_auc"],
+            )
+
+        mlflow.log_params(study.best_params)
+        mlflow.log_metric(f"best_cv_{SCORING}", study.best_value)
+        mlflow.log_metrics({f"train_{k}": v for k, v in tuned_result["train_metrics"].items()})
+        mlflow.log_metrics({f"test_{k}": v for k, v in tuned_result["test_metrics"].items()})
+        mlflow.log_metric(
+            "overfit_gap_roc_auc",
+            tuned_result["train_metrics"]["roc_auc"] - tuned_result["test_metrics"]["roc_auc"],
+        )
+        for path in (history_path, roc_path, TRIALS_PATH):
+            mlflow.log_artifact(str(path))
+        mlflow.sklearn.log_model(tuned_pipeline, name="model", serialization_format=CLOUDPICKLE)
+
+        # --- Report ---
+        untuned_gap = untuned_result["train_metrics"]["roc_auc"] - untuned_result["test_metrics"]["roc_auc"]
+        tuned_gap = tuned_result["train_metrics"]["roc_auc"] - tuned_result["test_metrics"]["roc_auc"]
+        gap_closed = untuned_gap - tuned_gap
+        lr_test_roc_auc = 0.8018  # Step 7/8 baseline, held fixed across the project (loaded model unchanged)
+        tuned_beats_lr = tuned_result["test_metrics"]["roc_auc"] > lr_test_roc_auc
+
+        search_space_table = pd.DataFrame(
+            [{"parameter": k, "range": v} for k, v in SEARCH_SPACE_DESCRIPTION.items()]
+        )
+
+        top_trials = trials_df.sort_values("value", ascending=False).head(5)
+        top_trials_display = top_trials[["number", "value"] + param_cols].round(4)
+
+        report = [
+            "# Hyperparameter Tuning Report — XGBoost",
+            "",
+            "Generated by `scripts/run_hyperparameter_tuning.py`. All numbers are measured; the test "
+            "set was evaluated exactly once, after the search finished. Logged to MLflow: a parent "
+            "run (`xgboost_tuned`) plus one nested child run per trial for full search visibility.",
+            "",
+            "## Why XGBoost, and why now",
+            "",
+            "Step 8 found XGBoost overfitting substantially with default hyperparameters (train-test "
+            "ROC-AUC gap of 0.232) while the untuned Logistic Regression baseline won on test "
+            "performance (0.8018 vs. 0.7679 ROC-AUC). This step asks the question Step 8 left open: "
+            "does proper regularisation let XGBoost close that gap and beat the baseline?",
+            "",
+            "## Metric choice: PR-AUC (average precision), not ROC-AUC",
+            "",
+            "The search optimises **average precision (PR-AUC)** across cross-validation folds, not "
+            "ROC-AUC. Under the mild class imbalance here (42.5%/57.5%), ROC-AUC can improve almost "
+            "entirely via better separation among confidently-retained customers — the tail of the "
+            "distribution nobody acts on. PR-AUC is driven by how well the model ranks and separates "
+            "the positive (churn) class specifically, which is what actually determines the quality of "
+            "the retention-priority list in Step 12. ROC-AUC is still reported for comparability with "
+            "every earlier step, but it is not what the search chases.",
+            "",
+            "## Search setup",
+            "",
+            f"- **Method**: Optuna, TPE sampler, {N_TRIALS} trials, `random_state={RANDOM_SEED}`.",
+            f"- **Validation**: Stratified {N_CV_SPLITS}-fold cross-validation on the TRAINING split "
+            f"only ({len(X_train):,} rows) — the test split ({len(X_test):,} rows) is not used until "
+            f"the final evaluation below.",
+            f"- **`scale_pos_weight`** is fixed at {scale_pos_weight:.3f} (the training class ratio, "
+            f"same as Step 8) rather than searched — it corrects class imbalance and is not a "
+            f"model-capacity parameter, so tuning it alongside capacity/regularisation parameters "
+            f"would conflate two different problems.",
+            "",
+            "## Search space",
+            "",
+            "Every parameter searched directly controls model capacity or regularisation — a targeted "
+            "response to Step 8's diagnosed overfitting, not a generic hyperparameter sweep:",
+            "",
+            md_table(search_space_table, index=False),
+            "",
+            "## Top 5 trials by CV score",
+            "",
+            md_table(top_trials_display, index=False),
+            "",
+            f"The search converged early — the running-best score reached {study.best_value:.4f} by "
+            f"trial 4 and never meaningfully improved over the remaining {N_TRIALS - 4} trials (see "
+            f"`reports/figures/optuna_history.png`), so the {N_TRIALS}-trial budget was sufficient; "
+            f"more trials would not have found a materially better configuration.",
+            "",
+            f"**Best CV {SCORING}: {study.best_value:.4f}**, with parameters:",
+            "",
+            "```",
+            *[f"{k}: {v}" for k, v in study.best_params.items()],
+            "```",
+            "",
+            "## Tuned vs. untuned: did tuning genuinely improve generalisation?",
+            "",
+            md_table(comparison_table),
+            "",
+            f"- Untuned XGBoost overfit gap (train − test ROC-AUC): **{untuned_gap:.4f}**",
+            f"- Tuned XGBoost overfit gap: **{tuned_gap:.4f}**",
+            f"- Gap closed: **{gap_closed:.4f}** "
+            f"({'the tuned model generalises meaningfully better' if gap_closed > 0.05 else 'a modest reduction' if gap_closed > 0 else 'no improvement — the gap did not shrink'})",
+            "",
+            "## Does the tuned model beat the Logistic Regression baseline?",
+            "",
+            f"Logistic Regression (Step 7/8, unchanged): test ROC-AUC 0.8018. Tuned XGBoost: test "
+            f"ROC-AUC {tuned_result['test_metrics']['roc_auc']:.4f}. "
+            + (
+                f"**Yes — the tuned model beats the baseline** by "
+                f"{tuned_result['test_metrics']['roc_auc'] - lr_test_roc_auc:+.4f} ROC-AUC, "
+                f"achieved through regularisation rather than raw model complexity."
+                if tuned_beats_lr
+                else f"**No — the baseline still wins** by "
+                f"{lr_test_roc_auc - tuned_result['test_metrics']['roc_auc']:+.4f} ROC-AUC even after "
+                f"tuning. On a dataset this size (3,458 training rows), a well-regularised linear model "
+                f"remains a legitimate, competitive choice — this is reported as the actual result, not "
+                f"adjusted to fit an expectation that tuning must produce a winner."
+            ),
+            "",
+            "## Note on evaluation discipline",
+            "",
+            "The test set was scored exactly once for the tuned model and once for the untuned model "
+            "(both loaded/retrained and evaluated in this single script run) — never during the 50-trial "
+            "search itself, which only ever saw cross-validation folds carved out of the training split.",
+            "",
+        ]
+
+        REPORT_PATH.write_text("\n".join(report), encoding="utf-8")
+        logger.info("Wrote report: %s", REPORT_PATH.relative_to(PATHS.root))
+        mlflow.log_artifact(str(REPORT_PATH))
 
     return 0
 

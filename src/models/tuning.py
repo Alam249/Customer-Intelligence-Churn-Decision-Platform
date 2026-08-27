@@ -75,16 +75,21 @@ def build_objective(
 
     def objective(trial: optuna.Trial) -> float:
         params = suggest_xgb_params(trial)
-        pipeline = Pipeline([
-            ("preprocess", build_tree_preprocessor()),
-            ("model", XGBClassifier(
-                **params,
-                scale_pos_weight=scale_pos_weight,
-                random_state=random_state,
-                eval_metric="logloss",
-                n_jobs=-1,
-            )),
-        ])
+        pipeline = Pipeline(
+            [
+                ("preprocess", build_tree_preprocessor()),
+                (
+                    "model",
+                    XGBClassifier(
+                        **params,
+                        scale_pos_weight=scale_pos_weight,
+                        random_state=random_state,
+                        eval_metric="logloss",
+                        n_jobs=-1,
+                    ),
+                ),
+            ]
+        )
         scores = cross_val_score(pipeline, X_train, y_train, cv=cv, scoring=scoring, n_jobs=1)
         return float(np.mean(scores))
 

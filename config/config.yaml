@@ -53,3 +53,15 @@ database:
   # (POSTGRES_USER / POSTGRES_PASSWORD / ...) at runtime.
   driver: postgresql+psycopg2
   schema: public
+
+mlflow:
+  # SQLite-backed local store (mlflow.db at the repo root), not the plain
+  # filesystem store: MLflow 3.x puts the filesystem backend in maintenance
+  # mode with reduced features, and the Model Registry (used to register the
+  # final model, Step 16) needs a database-backed store anyway. Still fully
+  # local — no separate tracking server process. Swapping to a remote
+  # tracking server later only means changing `tracking_uri`.
+  tracking_uri: "sqlite:///mlflow.db"
+  artifact_location: "mlartifacts"
+  experiment_name: "customer-churn-prediction"
+  registered_model_name: "churn-classifier"

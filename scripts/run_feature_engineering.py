@@ -26,7 +26,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import joblib  # noqa: E402
 import pandas as pd  # noqa: E402
 
-from src.config import CONFIG, PATHS, RANDOM_SEED  # noqa: E402
+from src.config import PATHS, RANDOM_SEED  # noqa: E402
 from src.features.catalog import FEATURE_CATALOG  # noqa: E402
 from src.features.engineer import CustomerFeatureEngineer  # noqa: E402
 from src.features.split import stratified_customer_split  # noqa: E402
@@ -54,14 +54,18 @@ def main() -> int:
     # downstream script accidentally treats it as a feature.
     df = df.drop(columns=["cutoff_date"])
 
-    logger.info("Splitting %d customers (stratified on is_churned, test_size=%.0f%%)", len(df), TEST_SIZE * 100)
+    logger.info(
+        "Splitting %d customers (stratified on is_churned, test_size=%.0f%%)", len(df), TEST_SIZE * 100
+    )
     train_df, test_df = stratified_customer_split(
         df, target="is_churned", test_size=TEST_SIZE, random_state=RANDOM_SEED
     )
     logger.info(
         "Train: %d customers (%.2f%% churned) | Test: %d customers (%.2f%% churned)",
-        len(train_df), train_df["is_churned"].mean() * 100,
-        len(test_df), test_df["is_churned"].mean() * 100,
+        len(train_df),
+        train_df["is_churned"].mean() * 100,
+        len(test_df),
+        test_df["is_churned"].mean() * 100,
     )
 
     logger.info("Fitting CustomerFeatureEngineer on the TRAINING split only")
@@ -71,7 +75,9 @@ def main() -> int:
         "RFM quantile bins actually formed (may be < 5 where a column has heavy ties): "
         "recency=%d, frequency=%d, monetary=%d | high-value threshold (75th pct of train "
         "monetary_total) = %.2f",
-        engineer.n_recency_bins_, engineer.n_frequency_bins_, engineer.n_monetary_bins_,
+        engineer.n_recency_bins_,
+        engineer.n_frequency_bins_,
+        engineer.n_monetary_bins_,
         engineer.high_value_threshold_,
     )
 
@@ -80,15 +86,18 @@ def main() -> int:
 
     new_cols = engineer.get_new_feature_names()
     assert all(c in train_out.columns for c in new_cols), "Transform did not add all expected columns"
-    assert len(train_out) == len(train_df) and len(test_out) == len(test_df), \
-        "Transform must not add or remove rows"
+    assert len(train_out) == len(train_df) and len(test_out) == len(
+        test_df
+    ), "Transform must not add or remove rows"
 
     PATHS.data_processed.mkdir(parents=True, exist_ok=True)
     train_path = PATHS.data_processed / "train.parquet"
     test_path = PATHS.data_processed / "test.parquet"
     train_out.to_parquet(train_path, index=False)
     test_out.to_parquet(test_path, index=False)
-    logger.info("Wrote %s (%d rows) and %s (%d rows)", train_path.name, len(train_out), test_path.name, len(test_out))
+    logger.info(
+        "Wrote %s (%d rows) and %s (%d rows)", train_path.name, len(train_out), test_path.name, len(test_out)
+    )
 
     PATHS.models.mkdir(parents=True, exist_ok=True)
     engineer_path = PATHS.models / "feature_engineer.joblib"
@@ -109,7 +118,9 @@ def main() -> int:
     new_feature_summary = train_out[new_cols].astype(float).describe().T.round(3)
 
     rfm_gradient = (
-        train_out.groupby("rfm_score")["is_churned"].agg(["mean", "size"]).round(4)
+        train_out.groupby("rfm_score")["is_churned"]
+        .agg(["mean", "size"])
+        .round(4)
         .rename(columns={"mean": "churn_rate", "size": "n_customers"})
     )
 
@@ -134,8 +145,8 @@ def main() -> int:
         "multiple snapshot cutoffs, which is a different, larger exercise reserved for future "
         "work (e.g. Step 19 drift monitoring).",
         "",
-        f"| Split | Customers | Churn rate |",
-        f"| --- | --- | --- |",
+        "| Split | Customers | Churn rate |",
+        "| --- | --- | --- |",
         f"| Train | {len(train_out):,} | {train_out['is_churned'].mean() * 100:.2f}% |",
         f"| Test | {len(test_out):,} | {test_out['is_churned'].mean() * 100:.2f}% |",
         "",
@@ -181,8 +192,8 @@ def main() -> int:
         "",
         f"- `data/processed/train.parquet` — {len(train_out):,} rows, {train_out.shape[1]} columns",
         f"- `data/processed/test.parquet` — {len(test_out):,} rows, {test_out.shape[1]} columns",
-        f"- `models/feature_engineer.joblib` — the fitted transformer, reused at inference time "
-        f"(Step 14) so new customers are scored against training-set thresholds",
+        "- `models/feature_engineer.joblib` — the fitted transformer, reused at inference time "
+        "(Step 14) so new customers are scored against training-set thresholds",
         "",
     ]
 

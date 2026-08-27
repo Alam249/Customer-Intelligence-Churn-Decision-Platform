@@ -28,8 +28,13 @@ exposed through a REST API and an analyst dashboard.
 | 12 | Customer Lifetime Value & Retention Priority | ✅ Complete |
 | 13 | Customer segmentation | ✅ Complete |
 | 14 | FastAPI prediction service | ✅ Complete |
-| 15–17 | Streamlit, MLflow, Docker | ⬜ Not started |
-| 18–21 | Testing, monitoring, uplift, LLM layer | ⬜ Not started |
+| 15 | Streamlit dashboard | ✅ Complete |
+| 16 | MLflow experiment tracking | ✅ Complete |
+| 17 | Docker | ✅ Complete |
+| 18 | Testing & code quality | ✅ Complete |
+| 19 | Model monitoring & drift detection | ✅ Complete |
+| 20 | Uplift / causal modelling | ✅ Complete |
+| 21 | LLM analyst layer | ⬜ Not started |
 
 ---
 
@@ -775,6 +780,17 @@ segmented list for all 4,323 customers in `reports/customer_segments.csv`.
 
 ## FastAPI prediction service
 
+> **`uvicorn` and `pytest` are two independent commands, not sequential
+> steps — never run them back-to-back in the same terminal.** `uvicorn
+> --reload` starts a persistent server that runs forever until you press
+> `Ctrl+C`; it never exits on its own. If you run `pytest` right after it in
+> the same shell, the shell is still blocked running `uvicorn` and `pytest`
+> never starts — it just looks stuck. `pytest tests/test_api.py` doesn't need
+> the server running at all (it loads the app in-process via `TestClient`) —
+> run it on its own, in a terminal where nothing else is running. Only start
+> `uvicorn` if you want to manually poke at the API yourself (browser, curl,
+> Swagger docs).
+
 ```bash
 uvicorn api.main:app --reload --port 8000
 ```
@@ -848,6 +864,482 @@ pytest tests/test_api.py -v
 customer matches (within 1e-3) the value already computed offline by Step
 12's batch pipeline — the API is checked against the project's own prior
 results, not just for "a plausible-looking response."
+
+---
+
+## Streamlit dashboard
+
+```bash
+streamlit run dashboard/Home.py
+```
+
+Seven pages, every number computed live from the actual saved models and
+data — nothing is a hardcoded number copied from a report:
+
+| Page | Content |
+| --- | --- |
+| **Executive Overview** | Customers, historical churn rate, predicted high-risk count, total value at risk, retention-priority count — all live |
+| **Churn Analytics** | Step 5's actual EDA figures + the real findings/modelling-implications text |
+| **Model Performance** | Live metrics for all 5 saved models against the real test set, plus an interactive decision-threshold slider (confusion matrix + precision/recall recomputed on every move) |
+| **Customer Explorer** | Pick any of the 4,323 customers — churn probability, CLV, retention priority, segment, and a live SHAP explanation via the exact same `explain_customer()` used by Step 11 and the Step 14 API |
+| **Customer Segments** | Step 13's live segment profiles, the real cluster figures, and a filterable per-segment customer list |
+| **Model Monitoring** | Step 19's reference-vs-current drift analysis, computed live via the exact same `compute_drift_analysis()` used by `scripts/run_drift_monitoring.py` — feature PSI/KS table, prediction-drift overlay, risk-band shift |
+| **Uplift & Targeting** | Step 20's simulated-campaign uplift analysis, computed live via the exact same `compute_uplift_analysis()` used by `scripts/run_uplift_modeling.py` — AUUC ranking, Qini curves, ground-truth validation, all clearly labeled as simulated |
+
+**Shared loading logic, not duplicated**: `src/serving.py` is a new module
+extracted from Step 14's `api/state.py` — the exact same function
+(`load_serving_context()`) now backs both the API and the dashboard, so they
+can never quietly compute two different versions of "the customer table."
+`api/state.py` was refactored into a thin adapter over it (all 12 API tests
+still pass, unchanged).
+
+**Verified without a browser**: every page and every interactive widget
+(the threshold slider at multiple positions, the customer selector across
+several customers, every segment filter, Steps 19 and 20's analysis pages)
+was exercised programmatically via Streamlit's `AppTest` framework — zero
+exceptions — and cross-checked: the Customer Explorer's SHAP output for
+customer 12346 is byte-identical to the Step 14 API's `/predict/explain`
+response for the same customer, confirming the two surfaces genuinely share
+one implementation rather than two that happen to agree today.
+
+One real bug caught before shipping: `explain_customer(save_plot=True)`
+would have written a new PNG into `reports/figures/` every time a dashboard
+user browsed to a different customer, silently littering the project's
+actual report artefacts with session junk. Fixed with a dedicated in-memory
+renderer (`dashboard/charts.py`) that reuses the exact same styling without
+touching disk.
+
+---
+
+## MLflow experiment tracking
+
+```bash
+mlflow ui --backend-store-uri sqlite:///mlflow.db --port 5500
+```
+
+Then open http://127.0.0.1:5500.
+
+**Why SQLite, not the plain filesystem store**: MLflow 3.x puts the pure
+`file:./mlruns` backend into maintenance mode with reduced features —
+confirmed directly, it raises on `mlflow.set_experiment()` unless
+`MLFLOW_ALLOW_FILE_STORE=true` is set. The Model Registry (needed to register
+the final model, below) requires a database-backed store anyway, so this
+project uses a local SQLite file (`mlflow.db` at the repo root) — still fully
+local, no separate tracking server process, just the currently-supported way
+to get one.
+
+**Integrated into the existing scripts, not a separate pipeline** — Steps
+7-10's training scripts gained MLflow calls (`mlflow.log_params/metrics/
+artifact`, `mlflow.sklearn.log_model`) without any change to their actual
+modelling logic. Re-ran all four from a clean `mlflow.db` to confirm: every
+metric is byte-identical to the pre-instrumentation numbers.
+
+| Run | Params logged | What's tracked |
+| --- | --- | --- |
+| `logistic_regression_baseline` (Step 7) | model type, class_weight, preprocessing | train/test metrics, all 4 figures, the model |
+| `random_forest`, `xgboost_untuned` (Step 8) | n_estimators, class_weight/scale_pos_weight | train/test metrics, overfit gap, timing, the model |
+| `xgboost_tuned` (Step 9) | search method, CV folds, best hyperparameters | best CV score, test metrics, **50 nested child runs** (one per Optuna trial, logged from Optuna's own results — no retraining), `optuna_trials.csv` |
+| `final_calibrated_model` (Step 10) | calibration method, base model | Brier score for every calibration candidate tried, metrics at 0.50 and at the recommended threshold, **registered** in the Model Registry |
+
+**The final model is registered, not just logged** — `mlflow.sklearn.log_model(..., registered_model_name="churn-classifier")`
+in Step 10's script, since that's the one model every later step (11-15)
+actually consumes. Verified via the registry API: `churn-classifier` version
+1, status `READY`, linked to its producing run.
+
+**A real compatibility issue, resolved rather than worked around**:
+`mlflow.sklearn.log_model`'s default `skops` serialization runs a type-trust
+audit that rejects several of this project's models' internal types
+(`xgboost.core.Booster`, sklearn's `_CalibratedClassifier`, etc. — confirmed
+by reproducing the exact `UntrustedTypesFoundException`). Rather than
+maintain a trusted-types allowlist across 5 different model architectures,
+every `log_model` call here uses `serialization_format="cloudpickle"` —
+consistent with the joblib/pickle serialization this project already uses
+and trusts everywhere else.
+
+**Why MLflow helps reproducibility and governance here**: every run captures
+the exact hyperparameters, the metrics that resulted, the code's own
+generated artefacts, and the model binary together, keyed by a single
+`run_id` — so "what parameters produced the model currently in
+`models/final_churn_model.joblib`" is a lookup, not a memory exercise or a
+`git blame`. The registry adds a stage a plain file cannot: a named,
+versioned pointer (`churn-classifier`) that Step 14's API or a future
+deployment step could resolve instead of hard-coding a file path, so
+promoting a newly retrained model is a registry operation, not a file copy.
+
+---
+
+## Docker
+
+### Architecture
+
+Two services are containerized — the FastAPI backend and the Streamlit
+dashboard — because both only need to be running to serve. A third,
+`postgres`, exists purely to (re)run the Step 3/12 data pipeline inside
+Docker; **verified directly that neither `api/` nor `dashboard/` contains any
+`get_database_url`/`POSTGRES_*` reference** — the serving layer and the
+offline data pipeline are genuinely decoupled, communicating only through
+files on disk (models, parquet, CSV reports), exactly as they do outside
+Docker. `postgres` is placed behind a Compose **profile** so `docker compose
+up` doesn't start (or wait on) a database the serving layer never touches.
+
+A single multi-stage `Dockerfile` builds one shared `base` layer (system
+packages, Python dependencies, application code) and two thin final stages
+(`api`, `dashboard`) that differ only in `CMD` — avoiding installing the
+~1.9GB dependency stack twice. Models, data, and reports are **not** copied
+into the image; they're mounted as volumes, so retraining a model or
+rebuilding a feature table never requires rebuilding the image.
+
+```
+┌─────────────┐        ┌──────────────┐
+│   api:8000  │        │ dashboard:8501│      (docker compose up)
+│  (FastAPI)  │        │  (Streamlit)  │
+└──────┬──────┘        └───────┬──────┘
+       │  reads (rw)           │  reads (ro)
+       ▼                       ▼
+  ./models  ./data/processed  ./reports        ← host bind mounts
+
+┌──────────────┐
+│ postgres:5432│   (docker compose --profile pipeline up)
+└──────────────┘
+       ▲
+       │  docker compose run --rm api python scripts/run_pipeline.py
+```
+
+### Ports
+
+| Service | Container port | Host port | URL |
+| --- | --- | --- | --- |
+| `api` | 8000 | 8000 | http://localhost:8000/docs |
+| `dashboard` | 8501 | 8501 | http://localhost:8501 |
+| `postgres` (pipeline profile only) | 5432 | 5432 (`POSTGRES_PORT`) | — |
+
+### Environment variables
+
+Read from `.env` (never baked into the image — `.dockerignore` explicitly
+excludes it). `POSTGRES_HOST` is the one exception: it's **fixed to `postgres`**
+in `docker-compose.yml` regardless of what `.env` says, because that hostname
+only resolves inside the Compose network — `.env`'s `POSTGRES_HOST=localhost`
+is correct for running a script directly on the host, not from a container.
+`LOG_LEVEL` passes through as-is; no other secrets are needed by `api`/`dashboard`.
+
+### Database configuration
+
+`postgres:16-alpine`, credentials from `.env`, data persisted in a named
+volume (`postgres_data`) so it survives `docker compose down` (but not `down -v`).
+Compose refuses to start `postgres` at all if `POSTGRES_PASSWORD` is unset
+(`${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}`) — a missing secret is
+a hard stop, not a silent empty-password container.
+
+### Volume handling
+
+| Mount | Service | Mode | Why |
+| --- | --- | --- | --- |
+| `./models` | api | rw | api doubles as the pipeline runner, which writes new models |
+| `./data/raw`, `./data/interim`, `./data/processed` | api | rw | pipeline scripts read raw, write interim/processed |
+| `./reports` | api | rw | pipeline scripts write reports/figures |
+| `./models`, `./data/processed`, `./reports` | dashboard | **ro** | dashboard only ever reads |
+| `postgres_data` | postgres | rw (named volume) | database files |
+
+`logs/` is deliberately **not** mounted — verified directly (`docker compose
+logs api`): the app logs `WARNING | File logging disabled ([Errno 13]
+Permission denied: '/app/logs')` and falls back to console-only logging, the
+exact graceful-degradation behaviour `src/utils/logging.py` was built with
+in Step 1, now confirmed working in a context it was never explicitly tested
+against before. Container logs go to stdout (`docker compose logs`), the
+standard container-native place for them.
+
+### Build, start, stop, verify
+
+```bash
+# Build (installs the full dependency stack into a shared base layer)
+docker compose build
+
+# Start serving (api + dashboard only — the common case)
+docker compose up -d
+
+# Verify
+curl http://localhost:8000/health
+# {"status":"ok","models_loaded":true,"n_customers":4323}
+curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" -d '{"customer_id": 12346}'
+# {"customer_id":12346,"churn_probability":0.3736,"risk_level":"Medium",
+#  "estimated_customer_value":32668.27,"retention_priority":12205.12,
+#  "segment":"Champions (loyal, high value)"}
+curl http://localhost:8501/_stcore/health   # -> ok
+docker compose ps                            # both should show "healthy"
+
+# Stop
+docker compose down          # keep the postgres_data volume, if you used it
+docker compose down -v       # also remove it
+
+# Optional: bring up Postgres and (re)run the pipeline inside Docker
+docker compose --profile pipeline up -d postgres
+docker compose run --rm api python scripts/run_pipeline.py
+```
+
+**All of the above was actually run, not just written down**: images built
+successfully (`project_ml-api`, `project_ml-dashboard`, ~1.92GB each,
+sharing a base layer), both containers reported `healthy`, `/predict` for
+customer 12346 returned the exact same result verified in every earlier
+step, both processes confirmed running as the non-root `appuser`, and the
+`postgres` profile was verified separately — a live `psycopg2` connection
+from inside the `api` container to `postgres` succeeded over the Compose
+network — then everything was torn down (`down -v`) before writing this up,
+so nothing was left running.
+
+*(Docker Desktop wasn't available in the environment this was built in;
+verified instead with [Colima](https://github.com/abiosoft/colima), a
+CLI-only Docker runtime for macOS — the `docker`/`docker compose` commands
+above are identical either way.)*
+
+---
+
+## Testing and code quality
+
+72 pytest tests (2.9s) plus Ruff and Black cover the two things most likely to
+silently break as this project grows: the pure-logic functions each modelling
+step depends on, and stylistic drift across a codebase now spanning 18 steps.
+
+```bash
+pytest tests/ -v            # run the full suite (72 tests)
+ruff check .                 # lint: unused imports, unsorted imports, bugbear checks
+black --check --diff .       # formatting: show what would change without touching files
+black .                      # apply formatting
+```
+
+**Testing philosophy — two deliberately different kinds of test:**
+
+- **Unit tests on synthetic data** (60 tests, `tests/test_*.py` except
+  `test_api.py`) for pure functions: feature engineering, preprocessing,
+  CLV, business-cost thresholds, retention segmentation, and data-quality
+  checks. Each uses a tiny hand-constructed table where the "right answer"
+  is verifiable by inspection, so a wrong assertion is as easy to catch as
+  a wrong implementation. This is the only practical way to test logic
+  functions in isolation — a real trained model isn't needed to check that
+  `assign_segments` uses `>=` at the median, not `>`.
+- **Integration tests against real artefacts** (12 tests, `tests/test_api.py`,
+  Step 14) for the full serving path: the live FastAPI app, loaded with the
+  actual trained models and real customer data, including a cross-check that
+  `/predict`'s live output for a known customer matches the value already
+  computed offline by Step 12's batch pipeline. Synthetic data can't catch a
+  bug in how the real feature engineer, preprocessor, and model interact —
+  only running the real pipeline can.
+
+**What the new tests actually guard against** (not padding — each one
+targets a specific way the corresponding step could silently regress):
+
+| File | Tests | What would break silently without it |
+| --- | --- | --- |
+| `test_feature_engineering.py` | 9 | `is_high_value` computing its percentile threshold from the *test* set instead of the fitted *train* threshold — reintroducing the exact leakage pattern Step 6 was built to avoid. Verified by simulating the bug: it changes the test's expected output from all-`True` to `[0,0,0,1]`. |
+| `test_preprocessing.py` | 7 | The tree pipeline's output feature names silently falling out of sync with the actual transformed column order — which would mislabel every SHAP attribution in Step 11 without raising any error. |
+| `test_clv.py` | 4 | One-time buyers being valued at `0` instead of their real observed transaction value — the exact bug Step 12 found and fixed in `estimate_clv` (`lifetimes`' own `monetary_value` field is structurally `0` for anyone with zero repeat purchases). |
+| `test_business_cost.py` | 6 | A sign error in the TP/FP/FN/TN cost formulas, or a monotonicity violation (higher contact cost should never *lower* the cost-optimal threshold) — either would flip Step 10's business recommendation without producing an obviously wrong-looking number. |
+| `test_retention_priority.py` | 7 | The median-split quadrant boundary silently changing from `>=` to `>`, reclassifying every customer tied at the median; and the "churn-alone vs. priority-score" targeting comparison, reproduced on a constructed 0%-overlap case that mirrors Step 12's real finding. |
+| `test_data_quality.py` | 14 | Any of Step 4's reusable quality checks (missing-value, duplicate, IQR outlier, correlation-with-target, near-constant column detection) failing to flag a real issue or flagging a non-issue — these functions decide what gets reported, so a bug here is invisible in the output, not just in the code. |
+| `test_model_prediction.py` | 13 | The risk-band cutoffs (0.30 / 0.60) becoming exclusive instead of inclusive at the boundary, or `compute_classification_metrics` crashing (instead of returning 0) at the zero-positive-predictions edge case Step 10's threshold sweep actually hits. |
+
+**Ruff and Black**, configured in `pyproject.toml`:
+
+- Ruff (`E`, `F`, `I`, `B` rule sets — pycodestyle, pyflakes, import sorting,
+  flake8-bugbear) found 55 real issues on first run: unsorted imports,
+  unused imports, extraneous f-string prefixes, one genuinely dead local
+  variable, six `zip()` calls now given an explicit `strict=True` (a real
+  latent bug class — a length mismatch would previously truncate silently
+  instead of raising), and long lines. All 55 were fixed, not suppressed.
+- Black then reformatted 43 of the 64 tracked Python files — expected on a
+  first run over a codebase built by hand across 17 prior steps. No logic
+  changed; verified by re-running the full test suite (still 72/72 passing)
+  and byte-compiling every file after formatting.
+- Line length is set to **110**, not Black's 88-character default: measured
+  the actual codebase first (max line 301 characters, 54 lines over 110) and
+  chose a width that catches genuinely long lines without wrapping the
+  project's deliberately explanatory long comments and docstrings.
+- `E402` (module-level import not at top) is disabled project-wide because
+  every `scripts/*.py` file deliberately does `sys.path.insert(...)` before
+  importing `src.*`, so each script stays runnable directly
+  (`python scripts/foo.py`) without requiring the project to be pip-installed.
+
+---
+
+## Model monitoring and drift detection
+
+```bash
+python scripts/run_drift_monitoring.py
+```
+
+Every earlier evaluation (Steps 7-10) measured the model against a test set
+drawn from the SAME population it was trained on — a stratified random
+split of one snapshot. That answers "does this model work on this data." It
+says nothing about whether the population the model would score TODAY still
+looks like the one it learned from. Step 19 answers that with two
+industry-standard statistics — **Population Stability Index (PSI)** and the
+**Kolmogorov-Smirnov test** — computed feature-by-feature and on the model's
+own prediction distribution.
+
+**Real data, not a fabricated drift scenario.** The "current" population is
+`customer_features_2011-03-09_h91.parquet` — an actual snapshot of the same
+business 3 months before the training cutoff, exported by the exact same SQL
+pipeline (`run_pipeline.py --cutoff 2011-03-09 --horizon 91`), then run
+through the identical Step 4 cleaning and the SAME train-fitted feature
+engineer before comparison. **Stated limitation:** that snapshot's label uses
+a 91-day horizon (the model's own is 183), so its `is_churned` is a different
+target definition and is never used as ground truth — this checks INPUT and
+PREDICTION drift only, not label-based performance drift.
+
+**Real, measured results** (3,458 reference customers vs. 4,273 current):
+
+| Check | Result |
+| --- | --- |
+| Feature drift | 3 of 34 monitored features flagged **major**, 0 **moderate** |
+| Major-drift features | `tenure_days` (PSI 2.34), `recency_days` (PSI 0.42), `recency_score` (PSI 0.32) |
+| Prediction drift (PSI) | 0.0094 — **none** |
+| Prediction drift (KS test) | statistic 0.023, p = 0.28 — not drifted at α=0.05 |
+| Mean predicted churn probability | 0.4260 (reference) vs. 0.4368 (current) |
+
+**The three flagged features are all cutoff-relative time measures, and the
+drift is mechanical, not concerning.** `tenure_days` counts days since a
+customer's first purchase relative to cutoff; the business's transaction
+history only starts 2009-12-01, so a population observed at the earlier
+2011-03-09 cutoff has structurally had less time to accumulate tenure than
+one observed 3 months later (`recency_score` is a discretised copy of
+`recency_days`, so its drift is the same phenomenon, not a second one). The
+purely behavioural composites that actually drive predictions —
+`monetary_total`, `frequency`, `rfm_score` — all sit in the **none** band,
+and the model's own prediction distribution shows no material drift either.
+This is the outcome a monitoring system is supposed to produce on a
+population that genuinely hasn't changed in the ways that matter: it
+correctly explains away a real but calendar-driven shift instead of raising
+a false alarm.
+
+**Why hand-rolled statistics, not Evidently:** PSI and the KS test are
+implemented directly on `scipy` (already a project dependency) in
+`src/monitoring.py`, rather than via a monitoring framework. Evidently's
+dependency footprint — a full web framework, telemetry, an NLP toolkit, none
+of which this project uses elsewhere — is disproportionate to what is,
+mathematically, two well-defined statistics over two dataframes. No new
+package was added to `requirements.txt` for this step.
+
+**Shared analysis, not duplicated**: `src/monitoring.py::compute_drift_analysis()`
+is the single implementation behind both `scripts/run_drift_monitoring.py`
+(writes `reports/monitoring_report.md` and two PNGs) and the dashboard's
+**Model Monitoring** page — the same principle `src/serving.py` already
+established for predictions. 19 unit tests (`tests/test_monitoring.py`)
+cover the PSI/KS primitives on synthetic distributions with a hand-verifiable
+right answer (identical distributions → near-zero PSI; a distribution
+shifted 3 standard deviations away → PSI > 0.25 and KS p < 0.05; a vanished
+category → still registers via the epsilon floor rather than silently
+dropping out of the sum).
+
+Full write-up: [reports/monitoring_report.md](reports/monitoring_report.md).
+
+---
+
+## Uplift / causal modelling
+
+```bash
+python scripts/run_uplift_modeling.py
+```
+
+**Every treatment-effect number this step produces is SIMULATED, not measured** —
+stated once here and repeated at every place it appears in the code, reports,
+and dashboard. Online Retail II has no retention campaign: no customer here
+was ever randomly offered a discount or a retention email, so there is no
+real answer anywhere in this dataset to "would contacting this customer have
+changed their behaviour." That is a fundamentally different question from
+the churn-probability estimation Steps 7-19 all answer with real data.
+
+**Why this step exists anyway, and why simulation is the honest way to do it.**
+Step 12's retention-priority score (`churn_probability x CLV`) implicitly
+assumes that the highest-risk, highest-value customers are also the ones
+worth contacting — but it never asks whether contacting someone would
+actually change their behaviour. Answering that requires a randomised
+experiment, which this dataset doesn't have. Simulation — building a
+synthetic experiment on top of REAL customer covariates and the REAL Step 10
+model's baseline churn probability — is the standard way this exact topic is
+taught when real experimental data isn't available (`causalml`, `econml`,
+and `scikit-uplift`'s own tutorials all work this way), and it lets this
+project demonstrate the real technical skill honestly instead of either
+skipping the topic or quietly presenting a synthetic scenario as a finding
+about real customers.
+
+**Simulation design** (`src/uplift.py`): treatment assigned by a fair coin
+flip, independent of every covariate (a valid RCT by construction); the true
+per-customer effect is a designed function of the real baseline churn
+probability, following two documented patterns from the uplift-modeling
+literature — **persuadables** (mid-risk customers, the largest positive
+effect) and **sleeping dogs** (very loyal customers, a small *negative*
+effect from being contacted at all, a real documented failure mode of
+broad-brush retention campaigns). `churn_probability` itself is deliberately
+never given to the uplift models as a covariate, since it was used to build
+the ground truth — including it would let a model partially "read the
+answer" instead of learning from raw behaviour, the harder task a real
+deployment would actually face.
+
+**Methodology implemented**: S-learner, T-learner, and X-learner (Künzel et
+al., 2019), evaluated with the standard Qini curve and AUUC (Area Under the
+Uplift Curve). Evaluated via **5-fold cross-fitting over the full 4,323-
+customer population**, not a single train/test split — a single held-out
+30% slice was tried first and produced a visibly noisy, non-monotonic result
+even for the simulation's own ground-truth score (confirmed directly while
+building this step); cross-fitting gets a genuine out-of-fold prediction for
+every customer instead of wasting most of a modest population on held-out
+evaluation.
+
+**Real, measured results** (from the actual run, real customer covariates,
+simulated treatment/outcome):
+
+| Model | AUUC | What it is |
+| --- | --- | --- |
+| Oracle (true uplift) | 22.97 | The simulation's own ground truth — the best any method could do; never available in a real deployment |
+| X-learner | 12.01 | Best real method |
+| T-learner | 5.99 | |
+| S-learner | 4.18 | Underperforms despite a *higher* correlation with true uplift (0.643) — see below |
+| Risk-based (naive) | 2.74 | Using churn probability itself as if higher risk meant higher treatment benefit |
+
+**A genuine, textbook-consistent finding, not assumed**: S-learner's
+predicted uplift has roughly 1/15th the spread of T-/X-learner's (std 0.004
+vs. 0.056-0.060, against a true-effect std of 0.0735) — a well-documented
+symptom of giving a single flexible model "treatment" as just one more
+feature among 34 covariates, which gives it little incentive to actually
+split on it. It still ranks customers in approximately the right relative
+order (hence the respectable correlation), but a full-curve metric like AUUC
+penalises its failure to separate the "sleeping dogs" from zero-effect
+customers in absolute terms.
+
+**Does risk x value targeting find the same customers as uplift targeting?**
+Top 20% by X-learner's predicted uplift vs. top 20% by Step 12's
+`retention_priority_score`: **24.4% overlap**. The naive assumption that
+"highest risk x value" and "most responsive to treatment" are the same group
+is not supported — Step 12's ranking remains the right tool for deciding WHO
+IS WORTH SAVING once contact is decided to be effective; the uplift ranking
+is the right tool for deciding WHO TO ACTUALLY CONTACT.
+
+**Two real bugs caught before shipping**, both found by testing against
+hand-derived expectations rather than trusting first output:
+
+1. `SLearner`/`TLearner`/`XLearner.__init__` used `base_estimator or
+   _default_classifier()` to apply a default when no estimator was passed.
+   scikit-learn ensemble models define `__len__`, and Python's `or` falls
+   back to `__len__()` when `__bool__` is absent — so passing an *unfitted*
+   ensemble crashed with `AttributeError: 'RandomForestClassifier' object
+   has no attribute 'estimators_'` instead of just using it. Fixed by an
+   explicit `is not None` check everywhere this pattern appeared.
+2. The Oracle (true-uplift) score scoring *worse* than several real models
+   on a single 30%-of-4,323 test split — confirmed via a decile breakdown
+   showing the top decile with *negative* observed uplift, purely from
+   sampling noise, not a code defect (the same score gave a clean gradient
+   and a strongly positive AUUC on the full population). This is what
+   motivated switching the whole evaluation to 5-fold cross-fitting.
+
+**Shared analysis, not duplicated**: `src/uplift.py::compute_uplift_analysis()`
+is the single implementation behind both `scripts/run_uplift_modeling.py`
+and the dashboard's **Uplift & Targeting** page. 19 unit tests
+(`tests/test_uplift.py`) cover the simulation function (checked against an
+independently recomputed value via `math.exp`, not the function under test),
+the Qini/AUUC formulas (an exact hand-derived 4-customer case), and the
+learners (directional correctness on a strongly separable synthetic
+scenario — responders correctly ranked above non-responders after cross-fitting).
+
+Full write-up: [reports/uplift_modeling_report.md](reports/uplift_modeling_report.md).
 
 ---
 
@@ -965,13 +1457,15 @@ INFO | Setup verification passed.
 | --- | --- |
 | Data manipulation | Python 3.10, pandas, NumPy |
 | Storage & feature layer | PostgreSQL, SQL, SQLAlchemy |
-| Modelling | scikit-learn *(XGBoost / LightGBM in later steps)* |
-| Explainability | SHAP *(later step)* |
-| Experiment tracking | MLflow *(later step)* |
-| Serving | FastAPI, Uvicorn *(later step)* |
-| Dashboard | Streamlit *(later step)* |
-| Packaging | Docker, Docker Compose *(later step)* |
-| Quality | pytest, Ruff, Black *(later step)* |
+| Modelling | scikit-learn, XGBoost, Optuna |
+| CLV | `lifetimes` (BG/NBD + Gamma-Gamma) |
+| Explainability | SHAP |
+| Experiment tracking | MLflow (SQLite-backed, local Model Registry) |
+| Serving | FastAPI, Uvicorn |
+| Dashboard | Streamlit |
+| Packaging | Docker, Docker Compose |
+| Testing | pytest, `fastapi.testclient` |
+| Quality | Ruff, Black |
 
 Dependencies are added to `requirements.txt` as each step is implemented, so the
 environment is installable at every commit rather than only at the end.

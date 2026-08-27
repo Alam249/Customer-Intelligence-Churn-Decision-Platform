@@ -54,8 +54,7 @@ def load_customer_transactions(engine: Engine, cutoff_date: str) -> pd.DataFrame
     genuine product lines, positive quantity/price) for consistency with the
     rest of the project's revenue accounting.
     """
-    query = text(
-        """
+    query = text("""
         SELECT i.customer_id, i.invoice_ts::date AS invoice_date,
                SUM(l.line_revenue) AS revenue
         FROM invoices i
@@ -67,8 +66,7 @@ def load_customer_transactions(engine: Engine, cutoff_date: str) -> pd.DataFrame
           AND l.quantity > 0 AND l.unit_price > 0
           AND i.invoice_ts::date <= CAST(:cutoff_date AS date)
         GROUP BY i.customer_id, i.invoice_ts::date
-        """
-    )
+        """)
     return pd.read_sql(query, engine, params={"cutoff_date": cutoff_date})
 
 
@@ -78,8 +76,12 @@ def build_clv_summary(transactions: pd.DataFrame, cutoff_date: str) -> pd.DataFr
     hand-rolled equivalent.
     """
     return summary_data_from_transaction_data(
-        transactions, customer_id_col="customer_id", datetime_col="invoice_date",
-        monetary_value_col="revenue", observation_period_end=cutoff_date, freq="D",
+        transactions,
+        customer_id_col="customer_id",
+        datetime_col="invoice_date",
+        monetary_value_col="revenue",
+        observation_period_end=cutoff_date,
+        freq="D",
     )
 
 
@@ -107,7 +109,10 @@ def fit_gamma_gamma(summary: pd.DataFrame, penalizer_coef: float = 0.001) -> Gam
 
 
 def estimate_clv(
-    bgf: BetaGeoFitter, ggf: GammaGammaFitter, summary: pd.DataFrame, transactions: pd.DataFrame,
+    bgf: BetaGeoFitter,
+    ggf: GammaGammaFitter,
+    summary: pd.DataFrame,
+    transactions: pd.DataFrame,
     months: int = CLV_HORIZON_MONTHS,
 ) -> pd.DataFrame:
     """Expected purchases (all customers, BG/NBD handles frequency=0 natively)
@@ -138,7 +143,9 @@ def estimate_clv(
     # zero REPEAT purchases were observed) — that single row's revenue IS
     # their real, only observed transaction value.
     one_time_value = transactions.groupby("customer_id")["revenue"].sum()
-    out.loc[~is_repeat, "expected_value_per_purchase"] = out.index.map(one_time_value).values[~is_repeat.values]
+    out.loc[~is_repeat, "expected_value_per_purchase"] = out.index.map(one_time_value).values[
+        ~is_repeat.values
+    ]
 
     out["value_source"] = "gamma_gamma_conditional_expectation"
     out.loc[~is_repeat, "value_source"] = "own_observed_transaction (Gamma-Gamma unstable at frequency=0)"

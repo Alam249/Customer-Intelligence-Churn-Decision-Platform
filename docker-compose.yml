@@ -1,0 +1,97 @@
+# Customer Intelligence & Churn Decision Platform
+#
+# Two default services (api, dashboard) serve predictions from artifacts
+# already on disk — neither queries a database at runtime (verified: no
+# `get_database_url`/`POSTGRES_*` reference anywhere in api/ or dashboard/).
+# `postgres` is behind the "pipeline" profile: it exists to (re)run the Step
+# 3/12 data pipeline inside Docker, not because serving needs it. This split
+# is the actual architecture, not a simplification for the compose file —
+# the offline feature/CLV pipeline and the online serving layer are
+# genuinely decoupled, reading/writing local files as the interface between
+# them, same as they are outside Docker.
+#
+# Start serving only (the common case):
+#   docker compose up --build
+#
+# Also bring up Postgres to (re)run the data pipeline:
+#   docker compose --profile pipeline up -d postgres
+#   docker compose run --rm api python scripts/run_pipeline.py
+#   docker compose run --rm api python scripts/run_clv_and_retention_priority.py
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["pipeline"]
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-customer_intelligence}
+      POSTGRES_USER: ${POSTGRES_USER:-ci_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-ci_user} -d ${POSTGRES_DB:-customer_intelligence}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      target: api
+    ports:
+      - "8000:8000"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Only relevant when this image is used to run a pipeline script
+      # (`docker compose run api python scripts/...`) — the API process
+      # itself never opens a database connection. POSTGRES_HOST is fixed to
+      # the Compose service name (not read from .env) because that name only
+      # resolves *inside* this Docker network — .env's `localhost` is correct
+      # for running the same script directly on the host, not from a container.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-customer_intelligence}
+      POSTGRES_USER: ${POSTGRES_USER:-ci_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    # Read-write, not read-only: this same image doubles as the pipeline
+    # runner (`docker compose run api python scripts/...`), and those scripts
+    # WRITE new models/features/reports here. The `api` process itself
+    # (uvicorn) never writes anything at serve time — a deliberate, stated
+    # over-permission rather than maintaining a second service definition
+    # just to make serving read-only.
+    volumes:
+      - ./models:/app/models
+      - ./data/raw:/app/data/raw
+      - ./data/interim:/app/data/interim
+      - ./data/processed:/app/data/processed
+      - ./reports:/app/reports
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+  dashboard:
+    build:
+      context: .
+      target: dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./models:/app/models:ro
+      - ./data/processed:/app/data/processed:ro
+      - ./reports:/app/reports:ro
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8501/_stcore/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+
+volumes:
+  postgres_data:

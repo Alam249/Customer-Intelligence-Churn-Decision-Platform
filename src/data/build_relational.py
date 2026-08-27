@@ -93,9 +93,12 @@ def normalise_raw(df: pd.DataFrame) -> pd.DataFrame:
 def _classify_invoice_type(invoice_no: pd.Series) -> pd.Series:
     """SALE / CREDIT / ADJUSTMENT from the invoice-number prefix."""
     first = invoice_no.str[0]
-    return pd.Series(
-        pd.NA, index=invoice_no.index, dtype="string"
-    ).mask(first.eq("C"), "CREDIT").mask(first.eq("A"), "ADJUSTMENT").fillna("SALE")
+    return (
+        pd.Series(pd.NA, index=invoice_no.index, dtype="string")
+        .mask(first.eq("C"), "CREDIT")
+        .mask(first.eq("A"), "ADJUSTMENT")
+        .fillna("SALE")
+    )
 
 
 def build_countries(df: pd.DataFrame) -> pd.DataFrame:
@@ -124,9 +127,7 @@ def build_products(df: pd.DataFrame) -> pd.DataFrame:
     products["description"] = products["stock_code"].map(modal)
 
     is_voucher = products["stock_code"].str.startswith(("GIFT_0001", "GIFT"))
-    products["item_type"] = (
-        products["stock_code"].map(ITEM_TYPE_MAP).where(lambda s: s.notna(), None)
-    )
+    products["item_type"] = products["stock_code"].map(ITEM_TYPE_MAP).where(lambda s: s.notna(), None)
     products.loc[products["item_type"].isna() & is_voucher, "item_type"] = "VOUCHER"
     products["item_type"] = products["item_type"].fillna("PRODUCT")
 

@@ -58,7 +58,7 @@ def main() -> int:
 
     # --- Global ---
     plot_shap_summary(explanation)
-    importance_path = plot_shap_bar_importance(explanation)
+    plot_shap_bar_importance(explanation)
 
     mean_abs = np.abs(explanation.values).mean(axis=0).astype(np.float64)
     importance_table = (
@@ -93,8 +93,13 @@ def main() -> int:
     for label, cid in example_ids.items():
         result = explain_customer(cid, test_df, tuned_pipeline, final_model)
         local_explanations[label] = result
-        logger.info("%s (customer %d): %.1f%% churn probability, %s risk",
-                     label, cid, result["churn_probability"] * 100, result["risk_level"])
+        logger.info(
+            "%s (customer %d): %.1f%% churn probability, %s risk",
+            label,
+            cid,
+            result["churn_probability"] * 100,
+            result["risk_level"],
+        )
 
     # --- Report ---
     report = [
@@ -123,7 +128,7 @@ def main() -> int:
         "",
         "- Values are in **log-odds (margin) space** (`TreeExplainer`'s default): positive pushes "
         "the model's score toward churn, negative pushes toward retention. The magnitude is not "
-        "directly \"N percentage points of probability.\"",
+        'directly "N percentage points of probability."',
         "- **A high-impact feature is not a cause of churn.** SHAP explains the model, not the "
         "customer's real decision — it cannot separate a genuine driver from a feature that merely "
         "correlates with one. `recency_days` (below) is a case in point: it is mechanically close "

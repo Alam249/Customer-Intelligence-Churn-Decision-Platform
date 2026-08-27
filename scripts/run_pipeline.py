@@ -64,9 +64,7 @@ def run_sql(script: str, psql: str, pg_env: dict[str, str], variables: dict[str,
 
     logger.info("Running %s", script)
     # cwd is the repo root so the \copy paths in load_data.sql resolve.
-    result = subprocess.run(
-        cmd, cwd=PATHS.root, capture_output=True, text=True, env={**os.environ, **pg_env}
-    )
+    result = subprocess.run(cmd, cwd=PATHS.root, capture_output=True, text=True, env={**os.environ, **pg_env})
 
     if result.stdout.strip():
         print(result.stdout)
@@ -88,16 +86,14 @@ def export_feature_table(url: str, cutoff: str, horizon: int) -> Path:
     import pandas as pd
     from sqlalchemy import create_engine, text
 
-    query = text(
-        """
+    query = text("""
         SELECT f.*, l.is_churned
         FROM customer_features f
         JOIN churn_labels l USING (customer_id, cutoff_date)
         WHERE f.cutoff_date  = :cutoff
           AND l.horizon_days = :horizon
         ORDER BY f.customer_id
-        """
-    )
+        """)
     engine = create_engine(url)
     try:
         df = pd.read_sql(query, engine, params={"cutoff": cutoff, "horizon": horizon})
@@ -129,7 +125,10 @@ def main() -> int:
     parser.add_argument("--cutoff", default=churn_cfg["cutoff_date"], help="Observation cutoff date")
     parser.add_argument("--horizon", type=int, default=churn_cfg["horizon_days"], help="Label window (days)")
     parser.add_argument(
-        "--lookback", type=int, default=churn_cfg["eligibility_lookback_days"], help="Eligibility window (days)"
+        "--lookback",
+        type=int,
+        default=churn_cfg["eligibility_lookback_days"],
+        help="Eligibility window (days)",
     )
     parser.add_argument("--skip-build", action="store_true", help="Reuse existing data/interim CSVs")
     parser.add_argument("--skip-load", action="store_true", help="Skip schema creation and data load")

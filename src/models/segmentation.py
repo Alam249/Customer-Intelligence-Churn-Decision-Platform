@@ -44,8 +44,13 @@ from src.eda import CATEGORICAL, INK, SEQUENTIAL_BLUE, save_figure, set_style
 set_style()
 
 SEGMENTATION_FEATURES = [
-    "recency_days", "frequency", "monetary_total", "tenure_days",
-    "distinct_products", "spend_ratio_90d", "clv",
+    "recency_days",
+    "frequency",
+    "monetary_total",
+    "tenure_days",
+    "distinct_products",
+    "spend_ratio_90d",
+    "clv",
 ]
 
 
@@ -93,7 +98,7 @@ def check_stability(X: np.ndarray, k: int, n_splits: int = 5, random_state: int 
     scores = []
     for i in range(n_splits):
         idx = rng.permutation(n)
-        half_a, half_b = idx[: n // 2], idx[n // 2:]
+        half_a, half_b = idx[: n // 2], idx[n // 2 :]
         km_a = KMeans(n_clusters=k, random_state=random_state + i, n_init=10).fit(X[half_a])
         km_b = KMeans(n_clusters=k, random_state=random_state + i, n_init=10).fit(X[half_b])
         # Compare on the intersection isn't meaningful for disjoint halves —
@@ -126,7 +131,10 @@ def profile_clusters(df: pd.DataFrame, cluster_col: str = "cluster") -> pd.DataF
 # Plots
 # ---------------------------------------------------------------------------
 
-def plot_elbow_silhouette(scan_table: pd.DataFrame, chosen_k: int, name: str = "kmeans_elbow_silhouette") -> Path:
+
+def plot_elbow_silhouette(
+    scan_table: pd.DataFrame, chosen_k: int, name: str = "kmeans_elbow_silhouette"
+) -> Path:
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
     axes[0].plot(scan_table["k"], scan_table["inertia"], marker="o", color=SEQUENTIAL_BLUE)
     axes[0].axvline(chosen_k, color=INK["muted"], linestyle="--", linewidth=1)
@@ -143,8 +151,9 @@ def plot_elbow_silhouette(scan_table: pd.DataFrame, chosen_k: int, name: str = "
     return save_figure(fig, name)
 
 
-def plot_cluster_profile_heatmap(df: pd.DataFrame, features: list[str], cluster_col: str = "cluster",
-                                  name: str = "cluster_profile_heatmap") -> Path:
+def plot_cluster_profile_heatmap(
+    df: pd.DataFrame, features: list[str], cluster_col: str = "cluster", name: str = "cluster_profile_heatmap"
+) -> Path:
     """Standardised (z-score) mean of each feature per cluster — a diverging
     heatmap makes it immediate which clusters are high/low on which
     dimensions, which a table of raw medians does not.
@@ -158,16 +167,24 @@ def plot_cluster_profile_heatmap(df: pd.DataFrame, features: list[str], cluster_
     ax.set_yticks(range(len(means)), [f"Cluster {c}" for c in means.index])
     for i in range(z.shape[0]):
         for j in range(z.shape[1]):
-            ax.text(j, i, f"{z.values[i, j]:.1f}", ha="center", va="center", fontsize=8,
-                     color="white" if abs(z.values[i, j]) > 1 else INK["primary"])
+            ax.text(
+                j,
+                i,
+                f"{z.values[i, j]:.1f}",
+                ha="center",
+                va="center",
+                fontsize=8,
+                color="white" if abs(z.values[i, j]) > 1 else INK["primary"],
+            )
     fig.colorbar(im, ax=ax, shrink=0.8, label="Standardised mean (z-score)")
     ax.set_title("Cluster profiles (relative to population mean)")
     fig.tight_layout()
     return save_figure(fig, name)
 
 
-def plot_cluster_churn_and_value(df: pd.DataFrame, cluster_col: str = "cluster",
-                                  name: str = "cluster_churn_value") -> Path:
+def plot_cluster_churn_and_value(
+    df: pd.DataFrame, cluster_col: str = "cluster", name: str = "cluster_churn_value"
+) -> Path:
     """Two separate bar charts (never a dual axis) sharing cluster order."""
     agg = df.groupby(cluster_col).agg(churn_rate=("is_churned", "mean"), clv=("clv", "median")).sort_index()
     labels = [f"Cluster {c}" for c in agg.index]

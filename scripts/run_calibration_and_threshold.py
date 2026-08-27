@@ -10,6 +10,12 @@ overfitting problem resolved). Two questions this step answers:
      0.50 is an arbitrary default with no connection to what a retention
      action actually costs or is worth?
 
+Logged to MLflow (Step 16): params, metrics (Brier scores for every
+calibration candidate tried, standard metrics at 0.5 and at the recommended
+threshold), the calibration/threshold figures, and — since this produces the
+FINAL model every later step consumes — the model is also REGISTERED in the
+MLflow Model Registry, not just logged to this run.
+
 Run:
     python scripts/run_calibration_and_threshold.py
 """
@@ -22,16 +28,19 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import joblib  # noqa: E402
+import mlflow  # noqa: E402
+import mlflow.sklearn  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.calibration import CalibratedClassifierCV  # noqa: E402
 
-from src.config import PATHS, RANDOM_SEED  # noqa: E402
+from src.config import PATHS  # noqa: E402
 from src.evaluation.calibration import (  # noqa: E402
     compute_brier_score,
     plot_calibration_curves,
     plot_threshold_curves,
     threshold_performance_table,
 )
+from src.evaluation.metrics import compute_classification_metrics  # noqa: E402
 from src.models.business_cost import (  # noqa: E402
     BusinessCostAssumptions,
     find_optimal_threshold,
@@ -40,12 +49,14 @@ from src.models.business_cost import (  # noqa: E402
 from src.models.preprocessing import split_X_y_tree  # noqa: E402
 from src.utils.logging import get_logger  # noqa: E402
 from src.utils.report import md_table  # noqa: E402
+from src.utils.tracking import get_registered_model_name, init_experiment  # noqa: E402
 
 logger = get_logger(__name__)
 
 REPORT_PATH = PATHS.reports / "calibration_threshold_report.md"
 TUNED_MODEL_PATH = PATHS.models / "xgboost_tuned.joblib"
 FINAL_MODEL_PATH = PATHS.models / "final_churn_model.joblib"
+CLOUDPICKLE = mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE  # see Step 7's note on why not skops
 
 
 def main() -> int:
@@ -60,10 +71,14 @@ def main() -> int:
     X_train, y_train = split_X_y_tree(train_df)
     X_test, y_test = split_X_y_tree(test_df)
 
+    init_experiment()
+    mlflow.start_run(run_name="final_calibrated_model")
+
     tuned_pipeline = joblib.load(TUNED_MODEL_PATH)
     raw_proba = tuned_pipeline.predict_proba(X_test)[:, 1]
     raw_brier = compute_brier_score(y_test, raw_proba)
     logger.info("Uncalibrated tuned XGBoost: Brier score = %.4f", raw_brier)
+    mlflow.log_metric("brier_raw", raw_brier)
 
     # --- Calibration: fit on TRAIN via cross-validation, evaluate on TEST once ---
     # cv=5 clones the pipeline (same tuned hyperparameters) and fits each clone
@@ -78,6 +93,7 @@ def main() -> int:
         brier = compute_brier_score(y_test, proba)
         calibrated_results[label] = {"model": calibrated, "proba": proba, "brier": brier}
         logger.info("Calibrated (%s): Brier score = %.4f", label, brier)
+        mlflow.log_metric(f"brier_{method}", brier)
 
     best_label = min(calibrated_results, key=lambda k: calibrated_results[k]["brier"])
     best_brier = calibrated_results[best_label]["brier"]
@@ -87,18 +103,35 @@ def main() -> int:
     logger.info(
         "Calibration decision: %s (%s Brier %.4f vs. raw %.4f)",
         f"ADOPT {best_label}" if calibration_helps else "KEEP raw (uncalibrated) probabilities",
-        best_label, best_brier, raw_brier,
+        best_label,
+        best_brier,
+        raw_brier,
     )
 
     joblib.dump(final_model, FINAL_MODEL_PATH)
     logger.info("Saved final model: %s", FINAL_MODEL_PATH.relative_to(PATHS.root))
 
+    calibration_method = best_label if calibration_helps else "none (raw probabilities kept)"
+    mlflow.log_params(
+        {
+            "base_model": "xgboost_tuned (Step 9)",
+            "calibration_method": calibration_method,
+            "calibration_cv_folds": 5,
+            "calibration_candidates_tried": list(candidates.keys()),
+        }
+    )
+    mlflow.log_metric("brier_final", best_brier if calibration_helps else raw_brier)
+    final_metrics_05 = compute_classification_metrics(y_test, (final_proba >= 0.5).astype(int), final_proba)
+    mlflow.log_metrics({f"test_{k}": v for k, v in final_metrics_05.items()})
+
     # --- Figures ---
     calibration_curves = {"Raw (tuned XGBoost)": (y_test, raw_proba)}
     if calibration_helps:
         calibration_curves[f"Calibrated ({best_label})"] = (y_test, final_proba)
-    plot_calibration_curves(calibration_curves)
-    plot_threshold_curves(y_test, final_proba)
+    calibration_curve_path = plot_calibration_curves(calibration_curves)
+    threshold_curve_path = plot_threshold_curves(y_test, final_proba)
+    mlflow.log_artifact(str(calibration_curve_path))
+    mlflow.log_artifact(str(threshold_curve_path))
 
     # --- Threshold performance table ---
     threshold_table = threshold_performance_table(y_test, final_proba)
@@ -114,15 +147,21 @@ def main() -> int:
     # is deliberately expensive enough to test that boundary.
     scenarios = [
         BusinessCostAssumptions(
-            contact_cost=15.0, value_per_customer=value_per_customer, retention_success_rate=0.25,
+            contact_cost=15.0,
+            value_per_customer=value_per_customer,
+            retention_success_rate=0.25,
             label="Primary (discount code + some staff time, moderate offer)",
         ),
         BusinessCostAssumptions(
-            contact_cost=2.0, value_per_customer=value_per_customer, retention_success_rate=0.12,
+            contact_cost=2.0,
+            value_per_customer=value_per_customer,
+            retention_success_rate=0.12,
             label="Cheap, low-touch (automated email/SMS, low success)",
         ),
         BusinessCostAssumptions(
-            contact_cost=120.0, value_per_customer=value_per_customer, retention_success_rate=0.20,
+            contact_cost=120.0,
+            value_per_customer=value_per_customer,
+            retention_success_rate=0.20,
             label="Expensive, high-touch (personal retention call, uncertain payoff)",
         ),
     ]
@@ -135,7 +174,8 @@ def main() -> int:
         scenario_optimal[scenario.label] = find_optimal_threshold(sweep)
         logger.info(
             "Scenario '%s': optimal threshold=%.2f, net value=%.2f",
-            scenario.label, scenario_optimal[scenario.label]["threshold"],
+            scenario.label,
+            scenario_optimal[scenario.label]["threshold"],
             scenario_optimal[scenario.label]["net_value_vs_doing_nothing"],
         )
 
@@ -147,24 +187,37 @@ def main() -> int:
     default_cost = primary_sweep.iloc[(primary_sweep["threshold"] - 0.5).abs().argsort()[:1]].iloc[0]
     pct_flagged_at_recommended = float((final_proba >= recommended_threshold).mean())
 
+    mlflow.log_param("recommended_threshold_primary_scenario", recommended_threshold)
+    mlflow.log_metric("net_value_primary_scenario", primary_optimal["net_value_vs_doing_nothing"])
+    recommended_metrics = compute_classification_metrics(
+        y_test,
+        (final_proba >= recommended_threshold).astype(int),
+        final_proba,
+    )
+    mlflow.log_metrics({f"test_at_recommended_threshold_{k}": v for k, v in recommended_metrics.items()})
+
     # --- Report ---
     brier_table = pd.DataFrame(
         [{"probabilities": "Raw (tuned XGBoost)", "brier_score": round(raw_brier, 4)}]
-        + [{"probabilities": f"Calibrated ({label})", "brier_score": round(r["brier"], 4)}
-           for label, r in calibrated_results.items()]
+        + [
+            {"probabilities": f"Calibrated ({label})", "brier_score": round(r["brier"], 4)}
+            for label, r in calibrated_results.items()
+        ]
     )
 
-    scenario_table = pd.DataFrame([
-        {
-            "scenario": s.label,
-            "contact_cost": s.contact_cost,
-            "value_per_customer": round(s.value_per_customer, 2),
-            "retention_success_rate": s.retention_success_rate,
-            "optimal_threshold": scenario_optimal[s.label]["threshold"],
-            "net_value_vs_doing_nothing": scenario_optimal[s.label]["net_value_vs_doing_nothing"],
-        }
-        for s in scenarios
-    ])
+    scenario_table = pd.DataFrame(
+        [
+            {
+                "scenario": s.label,
+                "contact_cost": s.contact_cost,
+                "value_per_customer": round(s.value_per_customer, 2),
+                "retention_success_rate": s.retention_success_rate,
+                "optimal_threshold": scenario_optimal[s.label]["threshold"],
+                "net_value_vs_doing_nothing": scenario_optimal[s.label]["net_value_vs_doing_nothing"],
+            }
+            for s in scenarios
+        ]
+    )
 
     report = [
         "# Calibration and Business Threshold Report",
@@ -175,23 +228,25 @@ def main() -> int:
         "",
         "## 1. Is the tuned model's probability output trustworthy?",
         "",
-        f"`scale_pos_weight` (used to correct class imbalance in Step 8/9) is well known to shift "
-        f"predicted probabilities away from true frequencies even when it improves ranking metrics "
-        f"like ROC-AUC. This is checked directly, not assumed.",
+        "`scale_pos_weight` (used to correct class imbalance in Step 8/9) is well known to shift "
+        "predicted probabilities away from true frequencies even when it improves ranking metrics "
+        "like ROC-AUC. This is checked directly, not assumed.",
         "",
         "### Brier score (lower is better; 0 = perfect, 0.25 = a constant 0.5 guess on a balanced problem)",
         "",
         md_table(brier_table, index=False),
         "",
         f"**Decision: {'adopt ' + best_label + ' calibration' if calibration_helps else 'keep the raw (uncalibrated) probabilities'}.** "
-        + (f"{best_label} calibration reduces the Brier score from {raw_brier:.4f} to {best_brier:.4f} "
-           f"— a measurable improvement, so the calibrated probabilities are used for everything below "
-           f"and saved as the final model."
-           if calibration_helps else
-           f"Neither calibration method improved on the raw Brier score of {raw_brier:.4f} "
-           f"(best alternative: {best_label} at {best_brier:.4f}) — with only {len(X_train):,} "
-           f"training rows split across 5 calibration folds, there isn't enough data for calibration "
-           f"to reliably improve on the model's own probabilities, so they are used as-is."),
+        + (
+            f"{best_label} calibration reduces the Brier score from {raw_brier:.4f} to {best_brier:.4f} "
+            f"— a measurable improvement, so the calibrated probabilities are used for everything below "
+            f"and saved as the final model."
+            if calibration_helps
+            else f"Neither calibration method improved on the raw Brier score of {raw_brier:.4f} "
+            f"(best alternative: {best_label} at {best_brier:.4f}) — with only {len(X_train):,} "
+            f"training rows split across 5 calibration folds, there isn't enough data for calibration "
+            f"to reliably improve on the model's own probabilities, so they are used as-is."
+        ),
         "",
         "## 2. Calibration curve",
         "",
@@ -257,19 +312,21 @@ def main() -> int:
         "",
         f"At the default threshold of 0.50 instead: net value would be "
         f"€{default_cost['net_value_vs_doing_nothing']:,.2f} — "
-        + (f"€{primary_optimal['net_value_vs_doing_nothing'] - default_cost['net_value_vs_doing_nothing']:,.2f} "
-           f"less than the recommended threshold, a concrete demonstration of why 0.50 should not be "
-           f"used by default for a business decision."),
+        + (
+            f"€{primary_optimal['net_value_vs_doing_nothing'] - default_cost['net_value_vs_doing_nothing']:,.2f} "
+            f"less than the recommended threshold, a concrete demonstration of why 0.50 should not be "
+            f"used by default for a business decision."
+        ),
         "",
         "**Practical caveat this number-only optimum hides**: a threshold of "
         f"{recommended_threshold:.2f} flags **{pct_flagged_at_recommended:.1%} of all test "
-        f"customers** as \"contact.\" That is mathematically optimal under the stated cost "
+        f'customers** as "contact." That is mathematically optimal under the stated cost '
         f"assumptions — because a low-cost offer against a much larger potential loss says "
-        f"\"when in doubt, reach out\" — but it is not a *targeted* retention list; it is closer to "
+        f'"when in doubt, reach out" — but it is not a *targeted* retention list; it is closer to '
         f"a mass campaign. A real retention team almost always has a capacity constraint (agent "
         f"hours, a fixed offer budget) this simple framework doesn't model. In practice the "
-        f"threshold-performance table in section 3 or a fixed contact-list size (\"top 500 "
-        f"customers by risk\") is often the more usable operational answer; the cost-optimal "
+        f'threshold-performance table in section 3 or a fixed contact-list size ("top 500 '
+        f'customers by risk") is often the more usable operational answer; the cost-optimal '
         f"threshold here is the right number for the stated assumptions, not necessarily the right "
         f"number to hand a call-centre manager unmodified.",
         "",
@@ -282,7 +339,22 @@ def main() -> int:
     PATHS.reports.mkdir(parents=True, exist_ok=True)
     REPORT_PATH.write_text("\n".join(report), encoding="utf-8")
     logger.info("Wrote report: %s", REPORT_PATH.relative_to(PATHS.root))
+    mlflow.log_artifact(str(REPORT_PATH))
 
+    # This is THE final selected model for the whole project (Steps 11-15 all
+    # consume `models/final_churn_model.joblib`) — registered, not just logged,
+    # so it's discoverable in the Model Registry rather than only findable by
+    # knowing which run produced it.
+    registered_name = get_registered_model_name()
+    mlflow.sklearn.log_model(
+        final_model,
+        name="model",
+        serialization_format=CLOUDPICKLE,
+        registered_model_name=registered_name,
+    )
+    logger.info("Registered final model as '%s' in the MLflow Model Registry", registered_name)
+
+    mlflow.end_run()
     return 0
 
 

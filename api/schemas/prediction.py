@@ -20,7 +20,9 @@ class PredictRequest(BaseModel):
     # and, being a Field constraint rather than custom validator code, it
     # shows up in the generated JSON Schema for any client/codegen to see.
     customer_id: int = Field(
-        ..., gt=0, le=999_999,
+        ...,
+        gt=0,
+        le=999_999,
         description="Customer ID from the Online Retail II dataset (e.g. 12346; real IDs run ~12346-18287).",
         examples=[12346],
     )
@@ -97,10 +99,13 @@ class ErrorResponse(BaseModel):
     own 422 validation errors) — documented so a consumer doesn't have to
     guess from the source or trial-and-error.
     """
+
     detail: str = Field(..., description="Human-readable explanation of what went wrong.")
 
 
 class HealthResponse(BaseModel):
     status: Literal["ok"] = Field(..., description="Always 'ok' if the process is responding at all.")
-    models_loaded: bool = Field(..., description="Whether startup finished loading models and data successfully.")
+    models_loaded: bool = Field(
+        ..., description="Whether startup finished loading models and data successfully."
+    )
     n_customers: int = Field(..., description="Number of customers available to score via /predict.")

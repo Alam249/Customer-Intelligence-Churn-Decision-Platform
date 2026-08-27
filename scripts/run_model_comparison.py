@@ -24,6 +24,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import joblib  # noqa: E402
+import mlflow  # noqa: E402
+import mlflow.sklearn  # noqa: E402
 import pandas as pd  # noqa: E402
 from sklearn.ensemble import RandomForestClassifier  # noqa: E402
 from sklearn.pipeline import Pipeline  # noqa: E402
@@ -40,6 +42,30 @@ from src.models.preprocessing import (  # noqa: E402
 )
 from src.utils.logging import get_logger  # noqa: E402
 from src.utils.report import md_table  # noqa: E402
+from src.utils.tracking import init_experiment  # noqa: E402
+
+CLOUDPICKLE = mlflow.sklearn.SERIALIZATION_FORMAT_CLOUDPICKLE  # see Step 7's note on why not skops
+
+
+def _log_run(name: str, pipeline, params: dict, result: dict, extra_artifacts: list[Path]) -> None:
+    """One MLflow run for one freshly-trained model — params, train/test
+    metrics, the overfit gap, timing, its artifacts, and the model itself.
+    """
+    with mlflow.start_run(run_name=name):
+        mlflow.log_params(params)
+        mlflow.log_metrics({f"train_{k}": v for k, v in result["train_metrics"].items()})
+        mlflow.log_metrics({f"test_{k}": v for k, v in result["test_metrics"].items()})
+        mlflow.log_metrics(
+            {
+                "overfit_gap_roc_auc": result["train_metrics"]["roc_auc"] - result["test_metrics"]["roc_auc"],
+                "train_time_s": result["train_time_s"],
+                "inference_time_ms": result["inference_time_ms"],
+            }
+        )
+        for path in extra_artifacts:
+            mlflow.log_artifact(str(path))
+        mlflow.sklearn.log_model(pipeline, name="model", serialization_format=CLOUDPICKLE)
+
 
 logger = get_logger(__name__)
 
@@ -67,66 +93,133 @@ def main() -> int:
     X_test_tree, _ = split_X_y_tree(test_df)
     logger.info(
         "Train: %d rows | Test: %d rows | linear features: %d | tree features (pre-one-hot): %d",
-        len(X_train_tree), len(X_test_tree), X_train_lin.shape[1], X_train_tree.shape[1],
+        len(X_train_tree),
+        len(X_test_tree),
+        X_train_lin.shape[1],
+        X_train_tree.shape[1],
     )
 
     n_neg, n_pos = (y_train == 0).sum(), (y_train == 1).sum()
     scale_pos_weight = n_neg / n_pos  # XGBoost's equivalent of class_weight='balanced'
-    logger.info("Train class balance: %d retained / %d churned -> scale_pos_weight=%.3f", n_neg, n_pos, scale_pos_weight)
+    logger.info(
+        "Train class balance: %d retained / %d churned -> scale_pos_weight=%.3f",
+        n_neg,
+        n_pos,
+        scale_pos_weight,
+    )
 
+    init_experiment()
     results = []
 
     logger.info("Loading Step 7 Logistic Regression baseline (not retrained)")
     lr_pipeline = joblib.load(BASELINE_MODEL_PATH)
-    results.append(evaluate_model("Logistic Regression", lr_pipeline, X_train_lin, y_train, X_test_lin, y_test, already_fitted=True))
+    results.append(
+        evaluate_model(
+            "Logistic Regression", lr_pipeline, X_train_lin, y_train, X_test_lin, y_test, already_fitted=True
+        )
+    )
 
     logger.info("Training Random Forest")
-    rf_pipeline = Pipeline([
-        ("preprocess", build_tree_preprocessor()),
-        ("model", RandomForestClassifier(
-            n_estimators=300, class_weight="balanced", random_state=RANDOM_SEED, n_jobs=-1,
-        )),
-    ])
+    rf_pipeline = Pipeline(
+        [
+            ("preprocess", build_tree_preprocessor()),
+            (
+                "model",
+                RandomForestClassifier(
+                    n_estimators=300,
+                    class_weight="balanced",
+                    random_state=RANDOM_SEED,
+                    n_jobs=-1,
+                ),
+            ),
+        ]
+    )
     results.append(evaluate_model("Random Forest", rf_pipeline, X_train_tree, y_train, X_test_tree, y_test))
 
     logger.info("Training XGBoost")
-    xgb_pipeline = Pipeline([
-        ("preprocess", build_tree_preprocessor()),
-        ("model", XGBClassifier(
-            n_estimators=300, scale_pos_weight=scale_pos_weight, random_state=RANDOM_SEED,
-            eval_metric="logloss", n_jobs=-1,
-        )),
-    ])
+    xgb_pipeline = Pipeline(
+        [
+            ("preprocess", build_tree_preprocessor()),
+            (
+                "model",
+                XGBClassifier(
+                    n_estimators=300,
+                    scale_pos_weight=scale_pos_weight,
+                    random_state=RANDOM_SEED,
+                    eval_metric="logloss",
+                    n_jobs=-1,
+                ),
+            ),
+        ]
+    )
     results.append(evaluate_model("XGBoost", xgb_pipeline, X_train_tree, y_train, X_test_tree, y_test))
 
     for r in results:
-        logger.info("%-20s test ROC-AUC=%.4f  PR-AUC=%.4f  F1=%.4f  (train-test AUC gap=%.4f)",
-                     r["name"], r["test_metrics"]["roc_auc"], r["test_metrics"]["pr_auc"],
-                     r["test_metrics"]["f1"], r["train_metrics"]["roc_auc"] - r["test_metrics"]["roc_auc"])
+        logger.info(
+            "%-20s test ROC-AUC=%.4f  PR-AUC=%.4f  F1=%.4f  (train-test AUC gap=%.4f)",
+            r["name"],
+            r["test_metrics"]["roc_auc"],
+            r["test_metrics"]["pr_auc"],
+            r["test_metrics"]["f1"],
+            r["train_metrics"]["roc_auc"] - r["test_metrics"]["roc_auc"],
+        )
 
     comparison_table = build_comparison_table(results)
 
     # --- Figures ---
-    plot_roc_comparison({r["name"]: (y_test, r["test_proba"]) for r in results})
+    roc_path = plot_roc_comparison({r["name"]: (y_test, r["test_proba"]) for r in results})
 
     tree_feature_names = get_tree_output_feature_names(rf_pipeline.named_steps["preprocess"])
-    rf_importance = pd.DataFrame({
-        "feature": tree_feature_names,
-        "importance": rf_pipeline.named_steps["model"].feature_importances_,
-    })
-    plot_feature_importance(rf_importance, name="rf_feature_importance")
+    rf_importance = pd.DataFrame(
+        {
+            "feature": tree_feature_names,
+            "importance": rf_pipeline.named_steps["model"].feature_importances_,
+        }
+    )
+    rf_importance_path = plot_feature_importance(rf_importance, name="rf_feature_importance")
 
-    xgb_importance = pd.DataFrame({
-        "feature": tree_feature_names,
-        "importance": xgb_pipeline.named_steps["model"].feature_importances_,
-    })
-    plot_feature_importance(xgb_importance, name="xgb_feature_importance")
+    xgb_importance = pd.DataFrame(
+        {
+            "feature": tree_feature_names,
+            "importance": xgb_pipeline.named_steps["model"].feature_importances_,
+        }
+    )
+    xgb_importance_path = plot_feature_importance(xgb_importance, name="xgb_feature_importance")
 
     # --- Save models ---
     PATHS.models.mkdir(parents=True, exist_ok=True)
     joblib.dump(rf_pipeline, PATHS.models / "random_forest.joblib")
     joblib.dump(xgb_pipeline, PATHS.models / "xgboost.joblib")
     logger.info("Saved random_forest.joblib and xgboost.joblib")
+
+    # --- MLflow: one run per freshly-trained model (LR was already logged in Step 7) ---
+    rf_result, xgb_result = results[1], results[2]
+    _log_run(
+        "random_forest",
+        rf_pipeline,
+        {
+            "model_type": "RandomForestClassifier",
+            "n_estimators": 300,
+            "class_weight": "balanced",
+            "random_state": RANDOM_SEED,
+            "n_features": X_train_tree.shape[1],
+        },
+        rf_result,
+        [roc_path, rf_importance_path],
+    )
+    _log_run(
+        "xgboost_untuned",
+        xgb_pipeline,
+        {
+            "model_type": "XGBClassifier",
+            "n_estimators": 300,
+            "scale_pos_weight": round(scale_pos_weight, 4),
+            "random_state": RANDOM_SEED,
+            "n_features": X_train_tree.shape[1],
+        },
+        xgb_result,
+        [roc_path, xgb_importance_path],
+    )
 
     # --- Report ---
     best_model_name = comparison_table["test_roc_auc"].idxmax()
@@ -177,9 +270,12 @@ def main() -> int:
         "## Discussion",
         "",
         f"**1. Which model performs best?** **{best_model_name}**, test ROC-AUC {best_roc_auc:.4f}. "
-        + ("The Logistic Regression baseline itself is the best-performing model here — "
-           "neither tree ensemble improves on it:" if best_model_name == "Logistic Regression"
-           else f"Compared against the Logistic Regression baseline ({lr_roc_auc:.4f}):"),
+        + (
+            "The Logistic Regression baseline itself is the best-performing model here — "
+            "neither tree ensemble improves on it:"
+            if best_model_name == "Logistic Regression"
+            else f"Compared against the Logistic Regression baseline ({lr_roc_auc:.4f}):"
+        ),
         "",
         *challenger_lines,
         "",
@@ -223,12 +319,14 @@ def main() -> int:
     report += [
         "",
         "**3. Is the improvement over Logistic Regression meaningful?** "
-        + (f"No tree model improved on the baseline — the largest gap among the challengers is "
-           f"{largest_gap:+.4f} ROC-AUC, i.e. worse than Logistic Regression, not better. There is "
-           f"no improvement to evaluate the meaningfulness of."
-           if not best_beats_baseline else
-           f"The best challenger beats the baseline by {largest_gap:+.4f} ROC-AUC on 865 test "
-           f"customers — {'large enough to matter for ranking-based retention decisions.' if abs(largest_gap) > 0.02 else 'small: on this dataset size, differences under ~0.02 ROC-AUC are within the range plausibly attributable to a single train/test split rather than a genuine capability gap.'}"),
+        + (
+            f"No tree model improved on the baseline — the largest gap among the challengers is "
+            f"{largest_gap:+.4f} ROC-AUC, i.e. worse than Logistic Regression, not better. There is "
+            f"no improvement to evaluate the meaningfulness of."
+            if not best_beats_baseline
+            else f"The best challenger beats the baseline by {largest_gap:+.4f} ROC-AUC on 865 test "
+            f"customers — {'large enough to matter for ranking-based retention decisions.' if abs(largest_gap) > 0.02 else 'small: on this dataset size, differences under ~0.02 ROC-AUC are within the range plausibly attributable to a single train/test split rather than a genuine capability gap.'}"
+        ),
         "",
         "**4. Possible overfitting?** The `overfit_gap_roc_auc` column above (train ROC-AUC minus "
         "test ROC-AUC) is the tell — a gap near zero (as for Logistic Regression, Step 7) means the "

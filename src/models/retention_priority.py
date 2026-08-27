@@ -35,21 +35,25 @@ from src.eda import CATEGORICAL, INK, save_figure, set_style
 set_style()
 
 SEGMENT_COLORS = {
-    "High risk / High value": CATEGORICAL[7],   # red — the segment that matters most
-    "High risk / Low value": CATEGORICAL[3],    # yellow
-    "Low risk / High value": CATEGORICAL[0],    # blue
-    "Low risk / Low value": CATEGORICAL[2],     # aqua
+    "High risk / High value": CATEGORICAL[7],  # red — the segment that matters most
+    "High risk / Low value": CATEGORICAL[3],  # yellow
+    "Low risk / High value": CATEGORICAL[0],  # blue
+    "Low risk / Low value": CATEGORICAL[2],  # aqua
 }
 
 
-def compute_retention_priority(df: pd.DataFrame, churn_col: str = "churn_probability", clv_col: str = "clv") -> pd.DataFrame:
+def compute_retention_priority(
+    df: pd.DataFrame, churn_col: str = "churn_probability", clv_col: str = "clv"
+) -> pd.DataFrame:
     out = df.copy()
     out["retention_priority_score"] = (out[churn_col] * out[clv_col]).round(2)
     return out
 
 
 def assign_segments(
-    df: pd.DataFrame, churn_col: str = "churn_probability", clv_col: str = "clv",
+    df: pd.DataFrame,
+    churn_col: str = "churn_probability",
+    clv_col: str = "clv",
 ) -> pd.DataFrame:
     """High/Low risk x High/Low value quadrants, split at each dimension's
     own median — a standard, simple segmentation that adapts to this
@@ -72,7 +76,9 @@ def assign_segments(
     return out
 
 
-def segment_summary(df: pd.DataFrame, churn_col: str = "churn_probability", clv_col: str = "clv") -> pd.DataFrame:
+def segment_summary(
+    df: pd.DataFrame, churn_col: str = "churn_probability", clv_col: str = "clv"
+) -> pd.DataFrame:
     summary = df.groupby("segment").agg(
         n_customers=("customer_id", "count"),
         avg_churn_probability=(churn_col, "mean"),
@@ -83,7 +89,10 @@ def segment_summary(df: pd.DataFrame, churn_col: str = "churn_probability", clv_
 
 
 def compare_targeting_strategies(
-    df: pd.DataFrame, top_n: int, churn_col: str = "churn_probability", clv_col: str = "clv",
+    df: pd.DataFrame,
+    top_n: int,
+    churn_col: str = "churn_probability",
+    clv_col: str = "clv",
 ) -> dict:
     """Concrete evidence for why churn probability alone is insufficient:
     total CLV captured by a top-N list ranked on churn probability alone vs.
@@ -106,7 +115,10 @@ def compare_targeting_strategies(
 
 
 def plot_segment_quadrant(
-    df: pd.DataFrame, churn_col: str = "churn_probability", clv_col: str = "clv", name: str = "retention_quadrant"
+    df: pd.DataFrame,
+    churn_col: str = "churn_probability",
+    clv_col: str = "clv",
+    name: str = "retention_quadrant",
 ) -> Path:
     """Every customer plotted by churn probability (x) vs. CLV (y, log scale),
     coloured by segment, with the median split lines that define the quadrants.
@@ -114,10 +126,18 @@ def plot_segment_quadrant(
     fig, ax = plt.subplots(figsize=(6.5, 5.5))
     for segment, color in SEGMENT_COLORS.items():
         subset = df[df["segment"] == segment]
-        ax.scatter(subset[churn_col], subset[clv_col].clip(lower=1), s=10, alpha=0.5,
-                   color=color, label=f"{segment} (n={len(subset)})")
-    ax.axvline(df.attrs.get("risk_median", df[churn_col].median()), color=INK["muted"], linestyle="--", linewidth=1)
-    ax.axhline(df.attrs.get("value_median", df[clv_col].median()), color=INK["muted"], linestyle="--", linewidth=1)
+        ax.scatter(
+            subset[churn_col],
+            subset[clv_col].clip(lower=1),
+            s=10,
+            alpha=0.5,
+            color=color,
+            label=f"{segment} (n={len(subset)})",
+        )
+    risk_median = df.attrs.get("risk_median", df[churn_col].median())
+    value_median = df.attrs.get("value_median", df[clv_col].median())
+    ax.axvline(risk_median, color=INK["muted"], linestyle="--", linewidth=1)
+    ax.axhline(value_median, color=INK["muted"], linestyle="--", linewidth=1)
     ax.set_yscale("log")
     ax.set_xlabel("Churn probability")
     ax.set_ylabel("Estimated CLV (log scale)")
@@ -138,7 +158,7 @@ def plot_targeting_comparison(comparison: dict, name: str = "targeting_compariso
 
     fig, ax = plt.subplots(figsize=(5, 4.2))
     bars = ax.bar(labels, values, color=colors, width=0.55)
-    for bar, v in zip(bars, values):
+    for bar, v in zip(bars, values, strict=True):
         ax.text(bar.get_x() + bar.get_width() / 2, v, f"€{v:,.0f}", ha="center", va="bottom", fontsize=10)
     ax.set_ylabel("Total CLV at risk captured (€)")
     ax.set_title(f"Same contact budget (top {comparison['top_n']} customers)")

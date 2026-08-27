@@ -15,7 +15,6 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import (
     accuracy_score,
-    auc,
     average_precision_score,
     confusion_matrix,
     f1_score,
@@ -54,7 +53,7 @@ def plot_confusion_matrix(y_true, y_pred, name: str = "confusion_matrix") -> Pat
     cm_pct = cm / cm.sum(axis=1, keepdims=True) * 100
 
     fig, ax = plt.subplots(figsize=(4.6, 4.2))
-    im = ax.imshow(cm, cmap=plt.cm.Blues, vmin=0)
+    ax.imshow(cm, cmap=plt.cm.Blues, vmin=0)
     labels = ["Retained", "Churned"]
     ax.set_xticks([0, 1], labels)
     ax.set_yticks([0, 1], labels)
@@ -65,8 +64,15 @@ def plot_confusion_matrix(y_true, y_pred, name: str = "confusion_matrix") -> Pat
     for i in range(2):
         for j in range(2):
             text_color = "white" if cm[i, j] > cm.max() / 2 else INK["primary"]
-            ax.text(j, i, f"{cm[i, j]:,}\n({cm_pct[i, j]:.1f}%)", ha="center", va="center",
-                     color=text_color, fontsize=11)
+            ax.text(
+                j,
+                i,
+                f"{cm[i, j]:,}\n({cm_pct[i, j]:.1f}%)",
+                ha="center",
+                va="center",
+                color=text_color,
+                fontsize=11,
+            )
     fig.tight_layout()
     return save_figure(fig, name)
 
@@ -100,8 +106,13 @@ def plot_pr_curve(y_true, y_proba, name: str = "pr_curve") -> Path:
 
     fig, ax = plt.subplots(figsize=(4.8, 4.6))
     ax.plot(recall, precision, color=CHURN_COLORS[True], linewidth=2, label=f"Model (PR-AUC = {pr_auc:.3f})")
-    ax.axhline(base_rate, color=INK["muted"], linestyle="--", linewidth=1,
-               label=f"No skill (base rate = {base_rate:.3f})")
+    ax.axhline(
+        base_rate,
+        color=INK["muted"],
+        linestyle="--",
+        linewidth=1,
+        label=f"No skill (base rate = {base_rate:.3f})",
+    )
     ax.set_xlabel("Recall")
     ax.set_ylabel("Precision")
     ax.set_title("Precision-Recall curve")
@@ -121,8 +132,13 @@ def plot_roc_comparison(models: dict[str, tuple], name: str = "roc_comparison") 
     for i, (label, (y_true, y_proba)) in enumerate(models.items()):
         fpr, tpr, _ = roc_curve(y_true, y_proba)
         auc_score = roc_auc_score(y_true, y_proba)
-        ax.plot(fpr, tpr, color=CATEGORICAL[i % len(CATEGORICAL)], linewidth=2,
-                 label=f"{label} (AUC = {auc_score:.3f})")
+        ax.plot(
+            fpr,
+            tpr,
+            color=CATEGORICAL[i % len(CATEGORICAL)],
+            linewidth=2,
+            label=f"{label} (AUC = {auc_score:.3f})",
+        )
     ax.plot([0, 1], [0, 1], color=INK["muted"], linestyle="--", linewidth=1, label="No skill")
     ax.set_xlabel("False positive rate")
     ax.set_ylabel("True positive rate")
@@ -132,7 +148,9 @@ def plot_roc_comparison(models: dict[str, tuple], name: str = "roc_comparison") 
     return save_figure(fig, name)
 
 
-def plot_feature_importance(importance_table: pd.DataFrame, top_n: int = 15, name: str = "feature_importance") -> Path:
+def plot_feature_importance(
+    importance_table: pd.DataFrame, top_n: int = 15, name: str = "feature_importance"
+) -> Path:
     """Horizontal bar chart of a tree model's built-in feature importances.
 
     ``importance_table`` must have columns ['feature', 'importance']. Unlike
@@ -155,10 +173,17 @@ def plot_optimization_history(trial_values: list[float], name: str = "optuna_his
     """
     running_best = np.maximum.accumulate(trial_values)
     fig, ax = plt.subplots(figsize=(6.5, 4))
-    ax.scatter(range(1, len(trial_values) + 1), trial_values, color=INK["muted"], s=18,
-               alpha=0.6, label="Trial score")
-    ax.plot(range(1, len(trial_values) + 1), running_best, color=SEQUENTIAL_BLUE, linewidth=2,
-            label="Best so far")
+    ax.scatter(
+        range(1, len(trial_values) + 1),
+        trial_values,
+        color=INK["muted"],
+        s=18,
+        alpha=0.6,
+        label="Trial score",
+    )
+    ax.plot(
+        range(1, len(trial_values) + 1), running_best, color=SEQUENTIAL_BLUE, linewidth=2, label="Best so far"
+    )
     ax.set_xlabel("Trial")
     ax.set_ylabel("CV score (average precision)")
     ax.set_title("Hyperparameter search progress")

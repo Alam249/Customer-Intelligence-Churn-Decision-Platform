@@ -49,8 +49,15 @@ def plot_calibration_curves(
     ax.plot([0, 1], [0, 1], color=INK["muted"], linestyle="--", linewidth=1, label="Perfectly calibrated")
     for i, (label, (y_true, y_proba)) in enumerate(curves.items()):
         prob_true, prob_pred = calibration_curve(y_true, y_proba, n_bins=n_bins, strategy=strategy)
-        ax.plot(prob_pred, prob_true, marker="o", markersize=4, color=CATEGORICAL[i % len(CATEGORICAL)],
-                 linewidth=2, label=label)
+        ax.plot(
+            prob_pred,
+            prob_true,
+            marker="o",
+            markersize=4,
+            color=CATEGORICAL[i % len(CATEGORICAL)],
+            linewidth=2,
+            label=label,
+        )
     ax.set_xlabel("Mean predicted probability (per bin)")
     ax.set_ylabel("Observed churn frequency (per bin)")
     ax.set_title("Calibration (reliability diagram)")
@@ -67,13 +74,15 @@ def threshold_performance_table(y_true, y_proba, thresholds: np.ndarray | None =
     rows = []
     for t in thresholds:
         pred = (y_proba >= t).astype(int)
-        rows.append({
-            "threshold": round(float(t), 2),
-            "precision": precision_score(y_true, pred, zero_division=0),
-            "recall": recall_score(y_true, pred, zero_division=0),
-            "f1": f1_score(y_true, pred, zero_division=0),
-            "pct_flagged": pred.mean(),
-        })
+        rows.append(
+            {
+                "threshold": round(float(t), 2),
+                "precision": precision_score(y_true, pred, zero_division=0),
+                "recall": recall_score(y_true, pred, zero_division=0),
+                "f1": f1_score(y_true, pred, zero_division=0),
+                "pct_flagged": pred.mean(),
+            }
+        )
     return pd.DataFrame(rows).round(4)
 
 

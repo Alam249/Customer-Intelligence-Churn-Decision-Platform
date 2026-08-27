@@ -65,4 +65,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     traceback leaked to the client — full detail still goes to the server log.
     """
     logger.exception("Unhandled error on %s %s", request.method, request.url.path)
-    return JSONResponse(status_code=500, content={"detail": "Internal server error. See server logs for details."})
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error. See server logs for details."},
+    )

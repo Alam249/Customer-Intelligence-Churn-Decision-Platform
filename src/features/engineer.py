@@ -109,7 +109,13 @@ class CustomerFeatureEngineer(BaseEstimator, TransformerMixin):
 
     def get_new_feature_names(self) -> list[str]:
         return [
-            "spend_per_tenure_month", "orders_ratio_90d", "products_per_order",
-            "purchase_regularity_cv", "recency_score", "frequency_score",
-            "monetary_score", "rfm_score", "is_high_value",
+            "spend_per_tenure_month",
+            "orders_ratio_90d",
+            "products_per_order",
+            "purchase_regularity_cv",
+            "recency_score",
+            "frequency_score",
+            "monetary_score",
+            "rfm_score",
+            "is_high_value",
         ]

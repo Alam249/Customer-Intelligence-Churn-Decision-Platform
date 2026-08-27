@@ -93,9 +93,14 @@ def predict_explain(request: PredictRequest) -> ExplainResponse:
 
     try:
         result = explain_customer(
-            request.customer_id, state.customers, state.tuned_pipeline, state.final_model,
-            risk_low_cutoff=DEFAULT_RISK_LOW_CUTOFF, risk_high_cutoff=DEFAULT_RISK_HIGH_CUTOFF,
-            save_plot=False, explainer=state.explainer,
+            request.customer_id,
+            state.customers,
+            state.tuned_pipeline,
+            state.final_model,
+            risk_low_cutoff=DEFAULT_RISK_LOW_CUTOFF,
+            risk_high_cutoff=DEFAULT_RISK_HIGH_CUTOFF,
+            save_plot=False,
+            explainer=state.explainer,
         )
     except Exception as exc:
         logger.exception("Explanation failed for customer %d", request.customer_id)

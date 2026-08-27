@@ -69,13 +69,20 @@ def main() -> int:
         transactions = load_customer_transactions(engine, CUTOFF_DATE)
     finally:
         engine.dispose()
-    logger.info("Loaded %d (customer, date) transaction rows for %d customers",
-                len(transactions), transactions["customer_id"].nunique())
+    logger.info(
+        "Loaded %d (customer, date) transaction rows for %d customers",
+        len(transactions),
+        transactions["customer_id"].nunique(),
+    )
 
     summary = build_clv_summary(transactions, CUTOFF_DATE)
     n_repeat = int((summary["frequency"] > 0).sum())
-    logger.info("CLV summary: %d customers, %d repeat (frequency>0), %d one-time",
-                len(summary), n_repeat, len(summary) - n_repeat)
+    logger.info(
+        "CLV summary: %d customers, %d repeat (frequency>0), %d one-time",
+        len(summary),
+        n_repeat,
+        len(summary) - n_repeat,
+    )
 
     independence_corr = check_independence_assumption(summary)
     logger.info("Gamma-Gamma independence check: corr(frequency, monetary_value) = %.4f", independence_corr)
@@ -86,8 +93,12 @@ def main() -> int:
     logger.info("Gamma-Gamma params: %s", ggf.params_.to_dict())
 
     clv_df = estimate_clv(bgf, ggf, summary, transactions)
-    logger.info("CLV estimated for %d customers (median €%.2f, mean €%.2f)",
-                len(clv_df), clv_df["clv"].median(), clv_df["clv"].mean())
+    logger.info(
+        "CLV estimated for %d customers (median €%.2f, mean €%.2f)",
+        len(clv_df),
+        clv_df["clv"].median(),
+        clv_df["clv"].mean(),
+    )
 
     # --- 2. Churn probability for the same population ---
     logger.info("Scoring churn probability for the full eligible population")
@@ -107,27 +118,50 @@ def main() -> int:
     # scoring the full population didn't do something obviously wrong).
     mean_predicted = full_df["churn_probability"].mean()
     observed_rate = full_df["is_churned"].mean()
-    logger.info("Full-population sniff check: mean predicted P(churn)=%.4f vs. observed rate=%.4f",
-                mean_predicted, observed_rate)
+    logger.info(
+        "Full-population sniff check: mean predicted P(churn)=%.4f vs. observed rate=%.4f",
+        mean_predicted,
+        observed_rate,
+    )
 
     # --- 3. Combine ---
     combined = full_df[["customer_id", "churn_probability", "is_churned"]].merge(
-        clv_df[["customer_id", "frequency", "recency", "T", "monetary_value",
-                "expected_purchases", "expected_value_per_purchase", "value_source", "clv"]],
-        on="customer_id", how="inner",
+        clv_df[
+            [
+                "customer_id",
+                "frequency",
+                "recency",
+                "T",
+                "monetary_value",
+                "expected_purchases",
+                "expected_value_per_purchase",
+                "value_source",
+                "clv",
+            ]
+        ],
+        on="customer_id",
+        how="inner",
     )
-    logger.info("Combined churn+CLV table: %d customers (%d eligible customers had no matching "
-                "transaction summary and were dropped)", len(combined), len(full_df) - len(combined))
+    logger.info(
+        "Combined churn+CLV table: %d customers (%d eligible customers had no matching "
+        "transaction summary and were dropped)",
+        len(combined),
+        len(full_df) - len(combined),
+    )
 
     combined = compute_retention_priority(combined)
     combined = assign_segments(combined)
     seg_summary = segment_summary(combined)
     comparison = compare_targeting_strategies(combined, TOP_N_COMPARISON)
 
-    logger.info("Targeting comparison (top %d): churn-only captures €%.2f CLV-at-risk, "
-                "priority-ranked captures €%.2f (%.1f%% list overlap)",
-                TOP_N_COMPARISON, comparison["churn_only_total_clv_at_risk"],
-                comparison["priority_total_clv_at_risk"], comparison["overlap_pct"])
+    logger.info(
+        "Targeting comparison (top %d): churn-only captures €%.2f CLV-at-risk, "
+        "priority-ranked captures €%.2f (%.1f%% list overlap)",
+        TOP_N_COMPARISON,
+        comparison["churn_only_total_clv_at_risk"],
+        comparison["priority_total_clv_at_risk"],
+        comparison["overlap_pct"],
+    )
 
     n_at_max_proba = int((combined["churn_probability"] == combined["churn_probability"].max()).sum())
     top_priority_customer = combined.nlargest(1, "retention_priority_score").iloc[0]
@@ -156,10 +190,16 @@ def main() -> int:
 
     # --- Report ---
     top_10 = combined.sort_values("retention_priority_score", ascending=False).head(10)
-    top_10_display = top_10[["customer_id", "churn_probability", "clv", "retention_priority_score", "segment"]].round(3)
+    top_10_display = top_10[
+        ["customer_id", "churn_probability", "clv", "retention_priority_score", "segment"]
+    ].round(3)
 
-    bgnbd_params = pd.DataFrame([{"parameter": k, "value": round(v, 4)} for k, v in bgf.params_.to_dict().items()])
-    gg_params = pd.DataFrame([{"parameter": k, "value": round(v, 4)} for k, v in ggf.params_.to_dict().items()])
+    bgnbd_params = pd.DataFrame(
+        [{"parameter": k, "value": round(v, 4)} for k, v in bgf.params_.to_dict().items()]
+    )
+    gg_params = pd.DataFrame(
+        [{"parameter": k, "value": round(v, 4)} for k, v in ggf.params_.to_dict().items()]
+    )
 
     report = [
         "# Customer Lifetime Value and Retention Priority Report",
@@ -192,7 +232,7 @@ def main() -> int:
         "### A real limitation, found by testing this module while building it",
         "",
         "Gamma-Gamma's conditional expectation formula is unstable at `frequency=0`: testing it "
-        "directly on this data returned a **negative** \"expected profit\" for one-time buyers — not a "
+        'directly on this data returned a **negative** "expected profit" for one-time buyers — not a '
         "theoretical footnote, an actual result reproduced while building this pipeline. This is "
         "exactly why the standard practice (followed here) fits Gamma-Gamma on repeat customers only. "
         "One-time buyers instead use their own single observed transaction value as the value estimate "
@@ -200,7 +240,7 @@ def main() -> int:
         "",
         "## Fitted model parameters",
         "",
-        "**BG/NBD** (purchase frequency + \"still alive\" probability):",
+        '**BG/NBD** (purchase frequency + "still alive" probability):',
         "",
         md_table(bgnbd_params, index=False),
         "",
@@ -234,8 +274,8 @@ def main() -> int:
         f"Ranking the top **{TOP_N_COMPARISON}** customers by churn probability alone vs. by the "
         "combined retention priority score, for the SAME contact-list size:",
         "",
-        f"| Ranking strategy | Avg. CLV per customer | Total CLV-at-risk captured |",
-        f"| --- | --- | --- |",
+        "| Ranking strategy | Avg. CLV per customer | Total CLV-at-risk captured |",
+        "| --- | --- | --- |",
         f"| Churn probability alone | €{comparison['churn_only_avg_clv']:,.2f} | "
         f"€{comparison['churn_only_total_clv_at_risk']:,.2f} |",
         f"| Retention priority score | €{comparison['priority_avg_clv']:,.2f} | "
@@ -282,7 +322,7 @@ def main() -> int:
         "## A limitation of the pure product formula, visible in the table above",
         "",
         f"**{(top_10_display['segment'] == 'Low risk / High value').sum()} of the top 10 by priority "
-        "score are \"Low risk / High value,\" not \"High risk / High value.\"** This is mathematically "
+        'score are "Low risk / High value," not "High risk / High value."** This is mathematically '
         "correct under `churn_probability * CLV` — CLV's range spans nearly five orders of magnitude "
         "(€0.01 to over €129,000), so even a very low churn probability on an extreme-value customer "
         "can outrank a genuinely at-risk customer with modest value. It is also a real practical "
@@ -292,13 +332,13 @@ def main() -> int:
         "",
         "A deployment that wants to avoid this would filter to a minimum meaningful churn probability "
         "first (e.g. Step 10's cost-optimal threshold, or a stricter one chosen for capacity reasons) "
-        "and rank by priority score only within that filtered set — combining \"is this customer "
-        "actually at risk\" with \"is it worth acting on them\" instead of letting the second dominate "
+        'and rank by priority score only within that filtered set — combining "is this customer '
+        'actually at risk" with "is it worth acting on them" instead of letting the second dominate '
         "the first. This report presents the unfiltered ranking so the trade-off stays visible rather "
         "than being hidden inside a second, unstated design choice.",
         "",
-        "The segment summary's `total_clv_at_risk` for \"Low risk / High value\" being the largest of "
-        "all four segments is not a contradiction of \"don't spend retention budget here\" above — that "
+        'The segment summary\'s `total_clv_at_risk` for "Low risk / High value" being the largest of '
+        'all four segments is not a contradiction of "don\'t spend retention budget here" above — that '
         "column is a PORTFOLIO-level statistic (aggregate expected exposure summed across 1,888 "
         "customers), while the per-customer priority ranking is what should drive individual contact "
         "decisions. A segment can hold the most aggregate value at stake while still being the wrong "

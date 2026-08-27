@@ -11,6 +11,7 @@ models/*
 !models/.gitkeep
 mlruns/
 mlartifacts/
+mlflow.db
 *.pkl
 *.joblib
 *.onnx

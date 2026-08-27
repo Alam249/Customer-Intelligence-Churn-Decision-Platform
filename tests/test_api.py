@@ -71,13 +71,16 @@ def test_predict_unknown_customer_returns_404(client):
     assert "not found" in resp.json()["detail"].lower()
 
 
-@pytest.mark.parametrize("bad_body", [
-    {"customer_id": 0},          # violates gt=0
-    {"customer_id": -5},         # negative
-    {"customer_id": "abc"},      # wrong type
-    {},                          # missing required field
-    {"customer_id": 5_000_000},  # out of realistic range (custom validator)
-])
+@pytest.mark.parametrize(
+    "bad_body",
+    [
+        {"customer_id": 0},  # violates gt=0
+        {"customer_id": -5},  # negative
+        {"customer_id": "abc"},  # wrong type
+        {},  # missing required field
+        {"customer_id": 5_000_000},  # out of realistic range (custom validator)
+    ],
+)
 def test_predict_rejects_invalid_requests(client, bad_body):
     resp = client.post("/predict", json=bad_body)
     assert resp.status_code == 422

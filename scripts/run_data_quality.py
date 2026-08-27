@@ -33,11 +33,26 @@ RAW_NUMERIC_COLS = ["Quantity", "Price"]
 RAW_CATEGORY_COLS = ["Country"]
 
 FEATURE_NUMERIC_COLS = [
-    "recency_days", "frequency", "monetary_total", "monetary_avg_order",
-    "tenure_days", "active_days", "avg_interpurchase_days", "std_interpurchase_days",
-    "purchase_rate_per_month", "total_items", "avg_items_per_order", "distinct_products",
-    "avg_unit_price", "return_invoices", "return_value", "return_rate",
-    "orders_last_30d", "orders_last_90d", "spend_last_90d", "spend_ratio_90d",
+    "recency_days",
+    "frequency",
+    "monetary_total",
+    "monetary_avg_order",
+    "tenure_days",
+    "active_days",
+    "avg_interpurchase_days",
+    "std_interpurchase_days",
+    "purchase_rate_per_month",
+    "total_items",
+    "avg_items_per_order",
+    "distinct_products",
+    "avg_unit_price",
+    "return_invoices",
+    "return_value",
+    "return_rate",
+    "orders_last_30d",
+    "orders_last_90d",
+    "spend_last_90d",
+    "spend_ratio_90d",
 ]
 
 
@@ -116,10 +131,7 @@ def profile_raw(raw: pd.DataFrame) -> list[str]:
 def profile_features(fdf: pd.DataFrame) -> list[str]:
     sections = [f"## 2. Analytical feature table (`data/processed/{FEATURE_FILE}`)\n"]
 
-    sections.append(
-        f"- Customers (rows): **{len(fdf):,}**\n"
-        f"- Columns: **{fdf.shape[1]}**\n"
-    )
+    sections.append(f"- Customers (rows): **{len(fdf):,}**\n" f"- Columns: **{fdf.shape[1]}**\n")
 
     sections.append("### Duplicate customers\n")
     dupes = q.duplicate_report(fdf, subset=["customer_id"])
@@ -163,7 +175,9 @@ def profile_features(fdf: pd.DataFrame) -> list[str]:
     )
 
     sections.append("### Correlation with target (leakage screen)\n")
-    corr = q.correlation_with_target(fdf, target="is_churned", columns=FEATURE_NUMERIC_COLS, flag_threshold=0.5)
+    corr = q.correlation_with_target(
+        fdf, target="is_churned", columns=FEATURE_NUMERIC_COLS, flag_threshold=0.5
+    )
     sections.append(md_table(corr.round(3)) + "\n")
     top = corr.index[0]
     sections.append(
@@ -189,9 +203,7 @@ def profile_features(fdf: pd.DataFrame) -> list[str]:
 
     sections.append("### Highly correlated feature pairs (duplicate information, |r| >= 0.9)\n")
     pairs = q.highly_correlated_pairs(fdf, FEATURE_NUMERIC_COLS, threshold=0.9)
-    sections.append(
-        (md_table(pairs.round(3), index=False) if not pairs.empty else "_None found._") + "\n"
-    )
+    sections.append((md_table(pairs.round(3), index=False) if not pairs.empty else "_None found._") + "\n")
     if not pairs.empty:
         sections.append(
             "- `frequency` (orders placed) and `active_days` (distinct purchase days) are "
@@ -217,7 +229,9 @@ def main() -> int:
         return 1
 
     logger.info("Loading raw data: %s", raw_path)
-    raw = pd.read_csv(raw_path, parse_dates=["InvoiceDate"], dtype={"Invoice": "string", "StockCode": "string"})
+    raw = pd.read_csv(
+        raw_path, parse_dates=["InvoiceDate"], dtype={"Invoice": "string", "StockCode": "string"}
+    )
 
     logger.info("Loading feature table: %s", feature_path)
     fdf = pd.read_parquet(feature_path)
@@ -257,22 +271,46 @@ def main() -> int:
         md_table(
             pd.DataFrame(
                 [
-                    {"Problem": "34,335 exact duplicate raw line items", "Severity": "Low",
-                     "Treatment": "Keep — legitimate repeat line entries, not data-entry errors"},
-                    {"Problem": "22.77% of raw rows have no Customer ID", "Severity": "Expected",
-                     "Treatment": "Keep in DB (real revenue); excluded from customer-level features by design"},
-                    {"Problem": "Ambiguous country labels (Unspecified, European Community, RSA)",
-                     "Severity": "Low", "Treatment": "Keep; `is_uk` binary flag is the feature that matters"},
-                    {"Problem": "Right-skewed monetary/frequency features with reseller-driven outliers",
-                     "Severity": "Medium", "Treatment": "Keep rows; log-transform for linear models (Step 7)"},
-                    {"Problem": "return_rate > 1 for some customers", "Severity": "Low",
-                     "Treatment": "Capped at 1.0 for modelling; raw value preserved in return_rate_raw"},
-                    {"Problem": "Null interpurchase-gap features for low-frequency customers",
-                     "Severity": "Expected", "Treatment": "Kept null + added *_is_missing flags"},
-                    {"Problem": "recency_days strongly correlated with target", "Severity": "Watch",
-                     "Treatment": "Not leakage (pre-cutoff only, verified in SQL); flagged for SHAP scrutiny"},
-                    {"Problem": "Mild class imbalance (42.5% / 57.5%)", "Severity": "Low",
-                     "Treatment": "class_weight='balanced'; no resampling needed"},
+                    {
+                        "Problem": "34,335 exact duplicate raw line items",
+                        "Severity": "Low",
+                        "Treatment": "Keep — legitimate repeat line entries, not data-entry errors",
+                    },
+                    {
+                        "Problem": "22.77% of raw rows have no Customer ID",
+                        "Severity": "Expected",
+                        "Treatment": "Keep in DB (real revenue); excluded from customer-level features by design",
+                    },
+                    {
+                        "Problem": "Ambiguous country labels (Unspecified, European Community, RSA)",
+                        "Severity": "Low",
+                        "Treatment": "Keep; `is_uk` binary flag is the feature that matters",
+                    },
+                    {
+                        "Problem": "Right-skewed monetary/frequency features with reseller-driven outliers",
+                        "Severity": "Medium",
+                        "Treatment": "Keep rows; log-transform for linear models (Step 7)",
+                    },
+                    {
+                        "Problem": "return_rate > 1 for some customers",
+                        "Severity": "Low",
+                        "Treatment": "Capped at 1.0 for modelling; raw value preserved in return_rate_raw",
+                    },
+                    {
+                        "Problem": "Null interpurchase-gap features for low-frequency customers",
+                        "Severity": "Expected",
+                        "Treatment": "Kept null + added *_is_missing flags",
+                    },
+                    {
+                        "Problem": "recency_days strongly correlated with target",
+                        "Severity": "Watch",
+                        "Treatment": "Not leakage (pre-cutoff only, verified in SQL); flagged for SHAP scrutiny",
+                    },
+                    {
+                        "Problem": "Mild class imbalance (42.5% / 57.5%)",
+                        "Severity": "Low",
+                        "Treatment": "class_weight='balanced'; no resampling needed",
+                    },
                 ]
             ),
             index=False,

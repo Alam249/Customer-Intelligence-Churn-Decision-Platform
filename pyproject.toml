@@ -1,0 +1,28 @@
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+exclude = ["notebooks", ".venv"]
+
+[tool.ruff.lint]
+# E/F: pyflakes + pycodestyle correctness rules (unused imports, undefined
+# names, etc.) — the errors worth actually catching. I: import sorting.
+# B: flake8-bugbear, catches real correctness footguns (mutable default
+# args, etc.) beyond what pyflakes checks.
+select = ["E", "F", "I", "B"]
+ignore = [
+    "E402",  # module-level import not at top — every scripts/*.py deliberately
+             # does `sys.path.insert(...)` before importing `src.*`, since it
+             # must be runnable directly (`python scripts/foo.py`), not just
+             # via an installed package.
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Long generated-markdown f-strings (report text) are a deliberate content
+# choice, not a code-style lapse — wrapping them harms readability more than
+# a long line does.
+"scripts/*.py" = ["E501"]
+
+[tool.black]
+line-length = 110
+target-version = ["py310"]
+extend-exclude = "notebooks/"
