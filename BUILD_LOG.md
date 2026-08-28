@@ -2,7 +2,7 @@
 
 > 📄 **This is the full, step-by-step technical build log** — every design
 > decision, every real number, every bug found and how it was fixed, across
-> all 21 steps. If you're looking for the project overview, results summary,
+> all 23 steps. If you're looking for the project overview, results summary,
 > and quick-start instructions, see **[README.md](README.md)** instead. This
 > document is linked from there as the detailed write-up for anyone who
 > wants to see the actual methodology and verification behind every claim.
@@ -11,9 +11,10 @@ An end-to-end data science system that predicts customer churn, estimates custom
 value, explains individual predictions, and ranks customers for retention action —
 exposed through a REST API and an analyst dashboard.
 
-> **Status:** all 21 planned steps complete. This document was written
-> incrementally as each step was finished — no metric appears here until it
-> was actually produced from the real data.
+> **Status:** the 21 originally planned steps are complete, plus 2 follow-on
+> steps (a professional README pass, and a final skeptical self-audit).
+> This document was written incrementally as each step was finished — no
+> metric appears here until it was actually produced from the real data.
 
 ---
 
@@ -42,6 +43,8 @@ exposed through a REST API and an analyst dashboard.
 | 19 | Model monitoring & drift detection | ✅ Complete |
 | 20 | Uplift / causal modelling | ✅ Complete |
 | 21 | LLM analyst layer | ✅ Complete |
+| 22 | Professional GitHub README | ✅ Complete |
+| 23 | Final data science audit | ✅ Complete |
 
 ---
 
@@ -1416,6 +1419,137 @@ aliasing bug in the test harness itself, not in `providers.py`. Fixed by
 snapshotting `list(kwargs["messages"])` at call time.
 
 Full design rationale: `src/llm/tools.py` and `src/llm/providers.py` module docstrings.
+
+---
+
+## Professional GitHub README
+
+The single `README.md` this project had accumulated through Step 21 was
+1,552 lines — genuinely useful as a technical record, but the wrong shape
+for a repository's landing page (a recruiter or hiring manager typically
+gives a README's first screen a matter of seconds).
+
+**Split into two files, not edited in place**: `README.md` was rewritten
+from scratch as a short (~170-line), scannable landing page — badges, 4
+real chart images already produced by earlier steps (no new screenshot
+capture needed), a "Key results" table of real numbers, a Mermaid
+architecture diagram, and a condensed quick start. The full original
+content (this document) was preserved byte-for-byte and kept at the repo
+root as `BUILD_LOG.md` — deliberately NOT moved into a `docs/` subdirectory,
+since every one of its ~40 relative image and report links is relative to
+the repo root and would have silently broken by moving it into a
+subdirectory.
+
+**8 code/config references fixed, not left stale**: several runtime error
+messages, log warnings, and docstrings across the codebase said "see
+README" for detail (e.g. raw-data download instructions, which pipeline
+scripts to run) that now lives in `BUILD_LOG.md` — found by grepping every
+`.py`/`.yaml` file for the word, fixed one at a time, and re-verified with
+the full test suite and `AppTest` on the two dashboard pages whose error
+messages changed.
+
+**Two real inaccuracies caught while cross-checking the new content against
+reality**: the existing README had two off-by-one test-count errors from
+incremental editing across steps — it said 19 tests for `test_uplift.py`
+(actually 18), and said 34 tests total across the three Step 21 test files
+(actually 33, 14+12+7). Both caught by literally re-running
+`pytest --collect-only` on each file rather than trusting the
+previously-written numbers.
+
+---
+
+## Final data science audit
+
+A deliberately skeptical final pass — not a rubric-driven rubber stamp.
+Two kinds of work: re-verifying claims already made (reproducibility, data
+leakage, statistical rigor) and one substantial NEW empirical analysis that
+had never been done: checking whether the CLV model's *forecasts* (not just
+its assumptions) hold up against real subsequent purchase behaviour.
+
+```bash
+python scripts/run_final_audit.py
+```
+
+**Reproducibility — confirmed clean.** Every stochastic call site in `src/`
+and `scripts/` (32 in total) passes `random_state`/`RANDOM_SEED` explicitly;
+no raw unseeded `np.random.*` call exists anywhere. `AgglomerativeClustering`
+needs no seed (Ward linkage is deterministic).
+
+**Data leakage — re-verified, no new issues, one new caveat named
+explicitly.** The existing leakage controls (SQL assertions, Step 6's
+fit-on-train-only discipline, Step 10's train-only calibration) hold up.
+One soft methodological point, real but not previously named: the SAME
+fixed test split was evaluated and reported at every step from 7 through
+15, by a single project owner — no re-tuning ever used test performance,
+but repeatedly seeing the same numbers while making every downstream
+decision is a form of researcher degrees of freedom a held-out final test
+set with a separate evaluator would not have.
+
+**NEW: CLV/BG-NBD forecast validation, made possible by a genuine
+coincidence.** The deployed CLV model's fit cutoff (2011-06-09) plus its
+183-day horizon lands exactly on 2011-12-09 — the last real day of
+transaction data in the whole dataset. That means the entire remainder of
+the dataset, never used for anything else, is genuine holdout data for
+checking "did BG/NBD's predicted `expected_purchases` match what customers
+actually did next."
+
+The forward window is replicated directly from `sql/build_features.sql`'s
+own churn-label query, and the script asserts its own zero-purchase count
+against the project's already-published churned count (1,838) before
+trusting anything downstream — a real boundary bug (an earlier attempt
+produced 1,832) was caught this way and fixed. A second, smaller and
+genuinely new finding surfaced in the process: BG/NBD's own transaction
+definition (`src/models/clv.py`) requires a qualifying merchandise line,
+which the churn label's raw SQL does not — 4 real customers whose only
+forward invoice held a zero-priced line are "retained" by the churn label
+but "no purchase" by BG/NBD's own definition. Not a bug in either place, but
+a genuine, previously-undocumented inconsistency between the two.
+
+**Frequency result — strong**: Pearson r = 0.846 between BG/NBD's predicted
+`expected_purchases` and real purchase counts over the following 183 days,
+well-calibrated across every decile with no systematic over- or
+under-prediction band.
+
+**Monetary result — real limitation found, not previously known**:
+Gamma-Gamma's own conditional expectation (repeat customers, n=2,119) is
+well-calibrated, r ≈ 0.84, predicted and actual means within 4% of each
+other. The one-time-buyer fallback (Step 12's fix for Gamma-Gamma's
+frequency=0 instability — use the customer's own single observed
+transaction value) has essentially **zero** correlation with what they
+actually spend next (r = 0.006) and underestimates it by roughly half. This
+does not invalidate Step 12's fix — the alternative it replaced was
+provably worse (sometimes negative) — but it means CLV for the ~30% of
+customers on that fallback path is a defensible point estimate, not an
+accurate individual forecast, and that should travel with any operational
+use of `retention_priority_score`.
+
+<p>
+  <img src="reports/figures/clv_forecast_validation_frequency.png" width="420" alt="CLV frequency forecast validation">
+  <img src="reports/figures/clv_forecast_validation_monetary.png" width="420" alt="CLV monetary forecast validation">
+</p>
+
+**Statistical rigor, documented honestly**: every headline metric comes
+from a single train/test split with no confidence interval computed (a
+different random seed's effect on ROC-AUC 0.8115 was never quantified);
+Step 5's Bonferroni correction covers the 10 numeric tests but not the
+separately-run categorical (chi-square) test; the business-cost framework's
+dollar figures remain scenario outputs given stated assumptions, not
+measurements.
+
+**LLM analyst layer — a brief robustness note, not a full red-team
+exercise**: every tool is read-only with a small bounded, typed argument
+schema and executes no arbitrary code or free-text SQL — a successful
+prompt injection could at most cause an incorrect tool call, not a data
+mutation or an arbitrary query.
+
+**Overall verdict**: no new data-leakage or correctness bug was found in
+the core pipeline. Every previously-documented limitation was re-checked
+and reaffirmed as accurately described, none understated. One new
+empirical validation was performed with a genuinely positive result for
+most of the population and one honestly surfaced, real limitation for a
+meaningful minority (one-time buyers' CLV estimates).
+
+Full write-up: [reports/final_audit_report.md](reports/final_audit_report.md).
 
 ---
 

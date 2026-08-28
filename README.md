@@ -43,6 +43,7 @@ Run it yourself in under a minute — see [Quick start](#quick-start) below.
 | Is "highest risk" the same as "worth saving"? | **No — 0% overlap** between the two rankings | Real, measured on the full population (not a toy example) |
 | Would contacting someone actually help? | Depends who — some customers respond *negatively* | Simulated uplift modeling (S-/T-/X-learner), clearly labeled synthetic |
 | Is the model still trustworthy over time? | Yes — prediction drift PSI 0.0094 (stable) | Checked against a real, independent 3-months-earlier snapshot |
+| Are the CLV forecasts actually accurate? | **r = 0.85** vs. real subsequent purchases | A genuine holdout check most churn projects never run — see [Final audit](BUILD_LOG.md#final-data-science-audit) |
 | Is any of this tested? | **142 automated tests**, Ruff + Black clean | Real data cross-checks, hand-derived formulas, mocked LLM calls — no network needed |
 
 ---
