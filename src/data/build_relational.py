@@ -55,7 +55,7 @@ def load_raw(path: Path | None = None) -> pd.DataFrame:
     raw_path = path or (PATHS.data_raw / CONFIG["data"]["raw_file"])
     if not raw_path.is_file():
         raise FileNotFoundError(
-            f"Raw dataset not found at {raw_path}. See the README for download instructions."
+            f"Raw dataset not found at {raw_path}. See BUILD_LOG.md for download instructions."
         )
 
     logger.info("Reading raw dataset: %s", raw_path)

@@ -29,7 +29,7 @@ if missing:
     st.error(
         "Required project artefacts are missing, so this dashboard cannot load real data:\n\n"
         + "\n".join(f"- `{m}`" for m in missing)
-        + "\n\nRun the project pipeline first (see README: Steps 6, 9, 10, 12, 13)."
+        + "\n\nRun the project pipeline first (see BUILD_LOG.md: Steps 6, 9, 10, 12, 13)."
     )
     st.stop()
 

@@ -4,7 +4,7 @@ Run:
     pytest tests/test_api.py -v
 
 Requires the artefacts produced by Steps 6, 9, 10, 12 and 13 to already
-exist (see README) — this suite exercises the live API end-to-end, not mocks,
+exist (see BUILD_LOG.md) — this suite exercises the live API end-to-end, not mocks,
 including cross-checking the API's on-the-fly prediction against the offline
 batch pipeline's precomputed value.
 """

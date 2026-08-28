@@ -87,7 +87,7 @@ def load_serving_context() -> ServingContext:
         raise FileNotFoundError(
             "Required artefact(s) not found: "
             + ", ".join(str(p.relative_to(PATHS.root)) for p in missing)
-            + ". Run the project pipeline first (README: Steps 6, 9, 10, 12, 13)."
+            + ". Run the project pipeline first (BUILD_LOG.md: Steps 6, 9, 10, 12, 13)."
         )
 
     try:
@@ -117,7 +117,7 @@ def load_serving_context() -> ServingContext:
             f"An artefact exists but failed to load ({type(exc).__name__}: {exc}). "
             "It may be corrupted or built with a different library version than the one "
             "installed (see requirements.txt) — try regenerating it via the project's "
-            "pipeline scripts (README: Steps 6, 9, 10, 12, 13)."
+            "pipeline scripts (BUILD_LOG.md: Steps 6, 9, 10, 12, 13)."
         ) from exc
 
     # `validate` turns a future duplicate customer_id in either CSV into a

@@ -72,7 +72,7 @@ if question:
         except AnalystNotConfiguredError:
             st.error(
                 "No LLM provider configured. Set `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `.env` "
-                "to use the analyst layer — see the README's Step 21 section."
+                "to use the analyst layer — see the README's Quick start section."
             )
             st.stop()
         except Exception as exc:  # the provider's own SDK/network errors

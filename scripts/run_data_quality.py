@@ -196,7 +196,7 @@ def profile_features(fdf: pd.DataFrame) -> list[str]:
     sections.append(
         f"- {', '.join(const_cols) if const_cols else 'None found.'}\n\n"
         "- **Explanation:** `cutoff_date` is constant because this export holds a single "
-        "label definition (see the SQL pipeline README section) — it is an artefact of "
+        "label definition (see BUILD_LOG.md's Data pipeline section) — it is an artefact of "
         "exporting one cutoff, not a data-quality defect. It carries no predictive "
         "information and should be dropped before modelling.\n"
     )

@@ -42,7 +42,7 @@ def main() -> int:
         size_mb = raw_file.stat().st_size / 1_000_000
         logger.info("Raw dataset found: %s (%.1f MB)", raw_file.name, size_mb)
     else:
-        logger.warning("Raw dataset not found at %s — see README for download steps.", raw_file)
+        logger.warning("Raw dataset not found at %s — see BUILD_LOG.md for download steps.", raw_file)
 
     logger.info("Setup verification passed.")
     return 0

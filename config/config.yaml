@@ -20,7 +20,7 @@ paths:
 
 data:
   # UCI Online Retail II — transactional data for a UK online gift retailer,
-  # 2009-12-01 to 2011-12-09. See README for provenance.
+  # 2009-12-01 to 2011-12-09. See BUILD_LOG.md's Dataset section for provenance.
   raw_file: online_retail_II.csv
   date_column: InvoiceDate
   customer_id_column: "Customer ID"
