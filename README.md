@@ -34,7 +34,7 @@ exposed through a REST API and an analyst dashboard.
 | 18 | Testing & code quality | ✅ Complete |
 | 19 | Model monitoring & drift detection | ✅ Complete |
 | 20 | Uplift / causal modelling | ✅ Complete |
-| 21 | LLM analyst layer | ⬜ Not started |
+| 21 | LLM analyst layer | ✅ Complete |
 
 ---
 
@@ -804,6 +804,7 @@ Endpoints:
 | `/health` | GET | Service status, whether models are loaded, customer count |
 | `/predict` | POST | `churn_probability`, `risk_level`, `estimated_customer_value` (Step 12 CLV), `retention_priority` (Step 12 score), `segment` (Step 13) |
 | `/predict/explain` | POST | Everything `/predict` returns, plus the top SHAP risk/protective factors and a plain-English narrative |
+| `/analyst/ask` | POST | Step 21's LLM analyst: a natural-language `question` in, a tool-grounded `answer` plus the full `tool_calls` trace out. 503 if no API key is configured. |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/predict \
@@ -863,7 +864,10 @@ pytest tests/test_api.py -v
 12 tests, including one that asserts the live API's prediction for a known
 customer matches (within 1e-3) the value already computed offline by Step
 12's batch pipeline — the API is checked against the project's own prior
-results, not just for "a plausible-looking response."
+results, not just for "a plausible-looking response." `/analyst/ask` has its
+own 7 tests in `tests/test_api_analyst.py` (Step 21), with the LLM call
+mocked so the endpoint's contract — validation, response shape, 503/500
+mapping — is tested without a real API key or cost.
 
 ---
 
@@ -873,7 +877,7 @@ results, not just for "a plausible-looking response."
 streamlit run dashboard/Home.py
 ```
 
-Seven pages, every number computed live from the actual saved models and
+Eight pages, every number computed live from the actual saved models and
 data — nothing is a hardcoded number copied from a report:
 
 | Page | Content |
@@ -885,6 +889,7 @@ data — nothing is a hardcoded number copied from a report:
 | **Customer Segments** | Step 13's live segment profiles, the real cluster figures, and a filterable per-segment customer list |
 | **Model Monitoring** | Step 19's reference-vs-current drift analysis, computed live via the exact same `compute_drift_analysis()` used by `scripts/run_drift_monitoring.py` — feature PSI/KS table, prediction-drift overlay, risk-band shift |
 | **Uplift & Targeting** | Step 20's simulated-campaign uplift analysis, computed live via the exact same `compute_uplift_analysis()` used by `scripts/run_uplift_modeling.py` — AUUC ranking, Qini curves, ground-truth validation, all clearly labeled as simulated |
+| **Ask the Analyst** | Step 21's tool-calling LLM chat interface — every answer's real tool calls are shown expanded alongside it; degrades to a clear setup message (not a crash) if no API key is configured |
 
 **Shared loading logic, not duplicated**: `src/serving.py` is a new module
 extracted from Step 14's `api/state.py` — the exact same function
@@ -895,12 +900,14 @@ still pass, unchanged).
 
 **Verified without a browser**: every page and every interactive widget
 (the threshold slider at multiple positions, the customer selector across
-several customers, every segment filter, Steps 19 and 20's analysis pages)
-was exercised programmatically via Streamlit's `AppTest` framework — zero
-exceptions — and cross-checked: the Customer Explorer's SHAP output for
-customer 12346 is byte-identical to the Step 14 API's `/predict/explain`
-response for the same customer, confirming the two surfaces genuinely share
-one implementation rather than two that happen to agree today.
+several customers, every segment filter, Steps 19-21's analysis/chat pages —
+including the Ask the Analyst page's no-API-key error path and its happy
+path with a mocked provider) was exercised programmatically via Streamlit's
+`AppTest` framework — zero exceptions — and cross-checked: the Customer
+Explorer's SHAP output for customer 12346 is byte-identical to the Step 14
+API's `/predict/explain` response for the same customer, confirming the two
+surfaces genuinely share one implementation rather than two that happen to
+agree today.
 
 One real bug caught before shipping: `explain_customer(save_plot=True)`
 would have written a new PNG into `reports/figures/` every time a dashboard
@@ -1095,15 +1102,21 @@ above are identical either way.)*
 
 ## Testing and code quality
 
-72 pytest tests (2.9s) plus Ruff and Black cover the two things most likely to
+142 pytest tests (~5s; ~35s if the one `@pytest.mark.slow` uplift-cross-fitting
+test is included) plus Ruff and Black cover the two things most likely to
 silently break as this project grows: the pure-logic functions each modelling
-step depends on, and stylistic drift across a codebase now spanning 18 steps.
+step depends on, and stylistic drift across a codebase now spanning 21 steps.
+The counts and philosophy below describe Step 18, when this testing/tooling
+setup was first built (72 tests at the time); Steps 19-21 each added their
+own tests on the same principles, documented in their own sections further
+down this README.
 
 ```bash
-pytest tests/ -v            # run the full suite (72 tests)
-ruff check .                 # lint: unused imports, unsorted imports, bugbear checks
-black --check --diff .       # formatting: show what would change without touching files
-black .                      # apply formatting
+pytest tests/ -v                  # run the full suite (142 tests)
+pytest tests/ -v -m "not slow"    # skip the one slow test (~5s instead of ~35s)
+ruff check .                       # lint: unused imports, unsorted imports, bugbear checks
+black --check --diff .             # formatting: show what would change without touching files
+black .                            # apply formatting
 ```
 
 **Testing philosophy — two deliberately different kinds of test:**
@@ -1332,7 +1345,7 @@ hand-derived expectations rather than trusting first output:
 
 **Shared analysis, not duplicated**: `src/uplift.py::compute_uplift_analysis()`
 is the single implementation behind both `scripts/run_uplift_modeling.py`
-and the dashboard's **Uplift & Targeting** page. 19 unit tests
+and the dashboard's **Uplift & Targeting** page. 18 unit tests
 (`tests/test_uplift.py`) cover the simulation function (checked against an
 independently recomputed value via `math.exp`, not the function under test),
 the Qini/AUUC formulas (an exact hand-derived 4-customer case), and the
@@ -1340,6 +1353,62 @@ learners (directional correctness on a strongly separable synthetic
 scenario — responders correctly ranked above non-responders after cross-fitting).
 
 Full write-up: [reports/uplift_modeling_report.md](reports/uplift_modeling_report.md).
+
+---
+
+## LLM analyst layer
+
+```bash
+curl -X POST http://127.0.0.1:8000/analyst/ask \
+  -H "Content-Type: application/json" -d '{"question": "What is driving customer 12346'\''s churn risk?"}'
+```
+
+...or open the **Ask the Analyst** dashboard page for a chat interface.
+Requires `ANTHROPIC_API_KEY` or `OPENAI_API_KEY` in `.env` (neither is
+required for Steps 1-20) — without one, both the endpoint (503) and the
+dashboard page (a clear setup message, not a crash) degrade gracefully.
+
+**Why tools, not free-text generation.** An LLM asked "what's this
+customer's churn risk" has no real way to know the answer — it can only
+generate something plausible, which for a churn platform is exactly the
+failure mode that matters most: a confident, wrong number. Every one of the
+8 tools (`src/llm/tools.py`) wraps an already-built, already-tested piece of
+this project — Step 10's calibrated model, Step 11's SHAP explainer, Step
+12's CLV/priority scores, Step 13's segments, Step 19's drift analysis,
+Step 20's SIMULATED uplift analysis — and returns real, live-computed
+numbers. The system prompt instructs the model to call a tool before any
+factual claim and to explicitly flag simulated results as simulated; the
+response always includes the full `tool_calls` trace so that instruction is
+auditable, not just asserted.
+
+**Provider-agnostic, hand-rolled, no framework.** `ANTHROPIC_API_KEY` wins
+if both are set (this project was built with Claude Code); otherwise
+`OPENAI_API_KEY` is used. Anthropic's and OpenAI's tool-calling protocols
+differ enough (message/content-block shape, how a tool result is fed back)
+that each gets its own small, auditable loop (`src/llm/providers.py`)
+directly on the vendor's own SDK — no LangChain, the same hand-rolled-over-
+framework choice already made for monitoring (Step 19, over Evidently) and
+uplift modeling (Step 20, over causalml/econml). Model names are a
+`config/config.yaml` decision (`llm.anthropic_model` / `llm.openai_model`),
+not a hardcoded constant.
+
+**Testing without a real API key or cost.** 33 tests across three files,
+none requiring network access or an API key:
+
+| File | Tests | What's actually checked |
+| --- | --- | --- |
+| `tests/test_llm_tools.py` | 14 | Every tool against REAL project data — e.g. `get_model_performance()`'s ROC-AUC independently recomputed via `sklearn.metrics.roc_auc_score` in the test itself, not just re-called |
+| `tests/test_llm_agent.py` | 12 | The tool-calling loop against small fake objects mimicking each SDK's real response shape (verified directly against the installed `anthropic`/`openai` packages while building this) — tool execution, error handling, the max-iterations safety stop, and provider selection |
+| `tests/test_api_analyst.py` | 7 | The endpoint's contract (validation, response shape, 503/500 mapping) with `ask_analyst` mocked |
+
+**A real bug caught by writing the mocks, not by inspection**: the first
+version of the OpenAI-loop test recorded each API call's `messages` list by
+reference, so a later assertion saw the list AFTER further turns had
+mutated it, not the state at call time — a classic mutable-default-style
+aliasing bug in the test harness itself, not in `providers.py`. Fixed by
+snapshotting `list(kwargs["messages"])` at call time.
+
+Full design rationale: `src/llm/tools.py` and `src/llm/providers.py` module docstrings.
 
 ---
 
@@ -1367,6 +1436,7 @@ customer-intelligence-platform/
 │   ├── features/         Feature engineering transformers
 │   ├── models/           Training, tuning, persistence
 │   ├── evaluation/       Metrics, plots, evaluation reports
+│   ├── llm/              Step 21: grounding tools, provider-agnostic tool-calling loop
 │   ├── utils/            Logging and shared helpers
 │   └── config.py         Config + path resolution + database URL construction
 ├── tests/                pytest suite
@@ -1431,6 +1501,9 @@ make setup                  # creates .venv and installs requirements.txt
 source .venv/bin/activate
 
 cp .env.example .env        # then edit with your local PostgreSQL credentials
+                             # (add ANTHROPIC_API_KEY or OPENAI_API_KEY too, but only if
+                             # you want to use Step 21's LLM analyst layer — Steps 1-20
+                             # need neither)
 ```
 
 ## Verifying the setup
@@ -1462,6 +1535,7 @@ INFO | Setup verification passed.
 | Explainability | SHAP |
 | Experiment tracking | MLflow (SQLite-backed, local Model Registry) |
 | Serving | FastAPI, Uvicorn |
+| LLM analyst | Anthropic / OpenAI SDKs, hand-rolled tool-calling (no framework) |
 | Dashboard | Streamlit |
 | Packaging | Docker, Docker Compose |
 | Testing | pytest, `fastapi.testclient` |

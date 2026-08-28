@@ -65,6 +65,15 @@ black==26.5.1
 # learner and Qini/AUUC are implemented directly on scikit-learn (already
 # pinned above: RandomForestClassifier/Regressor, KFold) rather than via
 # `causalml`/`econml`/`scikit-uplift`, for the same reason. See src/uplift.py.
-#
+
+# ---- LLM analyst layer (Step 21) ----
+# Both official, minimal vendor SDKs — not a framework like LangChain. The
+# tool-calling loop is hand-rolled directly on each (src/llm/providers.py),
+# the same reasoning as the Step 19/20 NOTEs above. Provider-agnostic: only
+# ONE of ANTHROPIC_API_KEY / OPENAI_API_KEY needs to be set at runtime, but
+# both SDKs are installed so either works out of the box.
+anthropic==1.2.0
+openai==3.5.0
+
 # Packages for later steps are added as those steps are implemented, so the
 # environment stays minimal and installable at every commit.

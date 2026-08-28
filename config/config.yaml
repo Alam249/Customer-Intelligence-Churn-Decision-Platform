@@ -65,3 +65,11 @@ mlflow:
   artifact_location: "mlartifacts"
   experiment_name: "customer-churn-prediction"
   registered_model_name: "churn-classifier"
+
+llm:
+  # Provider-agnostic (Step 21): ANTHROPIC_API_KEY wins if both are set in
+  # .env, otherwise OPENAI_API_KEY is used. Model choice is a config
+  # decision, not a hardcoded constant — cheap/fast models by default since
+  # this is a tool-calling analyst, not a long-form writing task.
+  anthropic_model: "claude-haiku-4-5-20251001"
+  openai_model: "gpt-4o-mini"

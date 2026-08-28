@@ -23,7 +23,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from api.routers import health, predict
+from api.routers import analyst, health, predict
 from api.state import state
 from src.utils.logging import get_logger
 
@@ -42,9 +42,9 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title="Customer Intelligence & Churn Decision Platform API",
     description=(
-        "Serves churn-probability predictions, SHAP explanations, customer lifetime value, "
-        "and retention-priority scores for the Online Retail II customer base "
-        "(Steps 6-13 of the Customer Intelligence & Churn Decision Platform project)."
+        "Serves churn-probability predictions, SHAP explanations, customer lifetime value, and "
+        "retention-priority scores for the Online Retail II customer base (Steps 6-13), plus a "
+        "tool-calling LLM analyst endpoint grounded in the same real models and reports (Step 21)."
     ),
     version="1.0.0",
     lifespan=lifespan,
@@ -52,6 +52,7 @@ app = FastAPI(
 
 app.include_router(health.router)
 app.include_router(predict.router)
+app.include_router(analyst.router)
 
 
 @app.get("/", include_in_schema=False)

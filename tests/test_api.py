@@ -110,7 +110,7 @@ def test_openapi_schema_lists_all_endpoints(client):
     resp = client.get("/openapi.json")
     assert resp.status_code == 200
     paths = resp.json()["paths"]
-    assert {"/health", "/predict", "/predict/explain"} <= paths.keys()
+    assert {"/health", "/predict", "/predict/explain", "/analyst/ask"} <= paths.keys()
 
 
 def test_docs_page_loads(client):
